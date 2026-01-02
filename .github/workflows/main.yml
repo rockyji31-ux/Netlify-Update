@@ -1,4 +1,4 @@
-name: Production v18 (Final n8n Fix)
+name: Production v19 (Send Fixed)
 
 on:
   workflow_dispatch:
@@ -39,6 +39,7 @@ jobs:
           mkdir whatsapp
           echo '{"name":"wa-bot","main":"index.js","scripts":{"start":"node index.js"},"dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
 
+          # Fixed Index JS (Added /send route back)
           cat << 'EOF' > whatsapp/index.js
           const { default: makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, DisconnectReason, BufferJSON } = require('@whiskeysockets/baileys');
           const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino');
@@ -59,11 +60,23 @@ jobs:
              sock.ev.on('connection.update', (u) => { const {connection, lastDisconnect, qr}=u; if(qr) qrData=qr; if(connection==='open') qrData=null; if(connection==='close'){ if(lastDisconnect.error?.output?.statusCode!==DisconnectReason.loggedOut) startBot(); } });
              sock.ev.on('messages.upsert', async({messages})=>{ const m=messages[0]; if(!m.message||m.key.fromMe)return; try{ await axios.post(N8N_URL, {from:(m.key.participant||m.key.remoteJid).split('@')[0], text:m.message.conversation||m.message.extendedTextMessage?.text, name:m.pushName}); }catch(e){} });
           }
+          
+          // --- FIXED: ADDED SEND API BACK ---
+          app.post('/send', async (req, res) => {
+              try {
+                  if(!sock) return res.status(503).json({error:"Bot starting"});
+                  const { number, message } = req.body;
+                  const jid = number.includes('@') ? number : `${number}@s.whatsapp.net`;
+                  await sock.sendMessage(jid, { text: message });
+                  res.json({ status: true });
+              } catch (e) { res.status(500).json({ error: e.message }); }
+          });
+
           app.get('/qr', async(q,r)=>{ if(sock?.ws?.isOpen)return r.send('<h1>Connected</h1>'); if(!qrData)return r.send('<h1>Loading...</h1>'); r.send(`<img src="${await QRCode.toDataURL(qrData)}" />`); });
           app.listen(PORT, ()=> { console.log("Bot running"); startBot(); });
           EOF
 
-      # 4. START SERVICES (Splitting DB Variables for n8n)
+      # 4. START SERVICES
       - name: 🚀 Start Everything
         run: |
           docker network create bot-net
@@ -77,8 +90,7 @@ jobs:
           EOF
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile caddy
 
-          # N8N FIX: Using Explicit Variables
-          # Host, User, Port taken from your shared URL
+          # n8n
           docker run -d --name n8n --network bot-net \
             -e DB_TYPE=postgresdb \
             -e DB_POSTGRESDB_HOST="aws-1-ap-south-1.pooler.supabase.com" \
@@ -91,7 +103,7 @@ jobs:
             -e WEBHOOK_URL="https://shikshaportal.netlify.app/" \
             n8nio/n8n
 
-          # BOT FIX: Git installed
+          # Bot
           docker run -d --name wa-bot --network bot-net \
             -v $(pwd)/whatsapp:/app -w /app \
             -e MONGODB_URI="${{ secrets.MONGODB_URI }}" \
@@ -102,10 +114,7 @@ jobs:
         run: |
           echo "Waiting 30s..."
           sleep 30
-          echo "--- N8N LOGS ---"
-          docker logs n8n 2>&1 | tail -n 20
-          echo "--- BOT LOGS ---"
-          docker logs wa-bot 2>&1 | tail -n 20
+          docker ps -a
 
       # 6. KEEP ALIVE
       - name: ⏳ System Live

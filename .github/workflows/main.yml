@@ -139,7 +139,7 @@ jobs:
             -v $(pwd)/whatsapp:/app -w /app \
             -e PORT=10000 \
             -e MONGODB_URI="${{ secrets.MONGODB_URI }}" \
-            -e N8N_WEBHOOK_URL="https://shikshaportal.netlify.app/webhook/whatsapp" \
+            -e N8N_WEBHOOK_URL="http://n8n:5678/webhook/whatsapp" \
             node:20-alpine sh -c "npm install && node index.js"
 
           # C. Start n8n (With Supabase DB)

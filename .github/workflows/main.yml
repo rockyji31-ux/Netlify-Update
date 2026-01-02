@@ -1,4 +1,4 @@
-name: Production v17 (Git & Protocol Fix)
+name: Production v18 (Final n8n Fix)
 
 on:
   workflow_dispatch:
@@ -37,10 +37,8 @@ jobs:
       - name: 📝 Create Bot Files
         run: |
           mkdir whatsapp
-          # Basic Package JSON
           echo '{"name":"wa-bot","main":"index.js","scripts":{"start":"node index.js"},"dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
 
-          # Index JS
           cat << 'EOF' > whatsapp/index.js
           const { default: makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, DisconnectReason, BufferJSON } = require('@whiskeysockets/baileys');
           const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino');
@@ -65,7 +63,7 @@ jobs:
           app.listen(PORT, ()=> { console.log("Bot running"); startBot(); });
           EOF
 
-      # 4. START SERVICES (Fixes Applied Here)
+      # 4. START SERVICES (Splitting DB Variables for n8n)
       - name: 🚀 Start Everything
         run: |
           docker network create bot-net
@@ -79,20 +77,21 @@ jobs:
           EOF
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile caddy
 
-          # N8N FIX: Force 'postgres://' protocol
-          # We take the secret, replace postgresql:// with postgres:// and pass it
-          CLEAN_DB_URL=$(echo "${{ secrets.SUPABASE_URL }}" | sed 's/^postgresql:\/\//postgres:\/\//')
-
+          # N8N FIX: Using Explicit Variables
+          # Host, User, Port taken from your shared URL
           docker run -d --name n8n --network bot-net \
             -e DB_TYPE=postgresdb \
-            -e DB_POSTGRESDB_CONNECTION_STRING="$CLEAN_DB_URL" \
+            -e DB_POSTGRESDB_HOST="aws-1-ap-south-1.pooler.supabase.com" \
+            -e DB_POSTGRESDB_PORT="5432" \
+            -e DB_POSTGRESDB_DATABASE="postgres" \
+            -e DB_POSTGRESDB_USER="postgres.ymatdzammnejrmmiyygg" \
+            -e DB_POSTGRESDB_PASSWORD="Lokendra12345Super" \
             -e N8N_ENCRYPTION_KEY="kuchbhi123" \
             -e N8N_SECURE_COOKIE=false \
             -e WEBHOOK_URL="https://shikshaportal.netlify.app/" \
             n8nio/n8n
 
-          # BOT FIX: Install Git first!
-          # We use 'apk add git' before 'npm install'
+          # BOT FIX: Git installed
           docker run -d --name wa-bot --network bot-net \
             -v $(pwd)/whatsapp:/app -w /app \
             -e MONGODB_URI="${{ secrets.MONGODB_URI }}" \

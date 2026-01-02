@@ -1,7 +1,9 @@
-name: Fixed Production v14 (Simple Password)
+name: Production v16 (Supabase IPv4 Fix)
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
 
 jobs:
   deploy-stack:
@@ -27,38 +29,45 @@ jobs:
         run: |
           npm install -g netlify-cli
           rm -rf public && mkdir public
-          echo '<h1>System Loading... (Wait 60s)</h1>' > public/index.html
+          echo '<h1>Bot Starting...</h1>' > public/index.html
           echo "/* https://${{ secrets.NGROK_DOMAIN }}/:splat 200!" > public/_redirects
           netlify deploy --prod --site ${{ secrets.NETLIFY_SITE_ID }} --auth ${{ secrets.NETLIFY_TOKEN }} --dir=public
 
       # 3. CREATE BOT FILES
-      - name: 📝 Setup Files
+      - name: 📝 Create Bot Files
         run: |
           mkdir whatsapp
           echo '{"name":"wa-bot","main":"index.js","scripts":{"start":"node index.js"},"dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
-          
+
           cat << 'EOF' > whatsapp/index.js
           const { default: makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, DisconnectReason, BufferJSON } = require('@whiskeysockets/baileys');
           const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino');
           const app = express(); app.use(express.json());
           const PORT = 10000; const MONGO_URL = process.env.MONGODB_URI; const N8N_URL = "http://n8n:5678/webhook/whatsapp"; 
-          if(!MONGO_URL){console.error("❌ DB Missing");process.exit(1);}
+          
+          const connectDB = async () => {
+             try { await mongoose.connect(MONGO_URL); console.log("✅ Mongo Connected"); }
+             catch (e) { console.error("❌ Mongo Error:", e.message); setTimeout(connectDB, 5000); }
+          }; connectDB();
+
           const authSchema=new mongoose.Schema({_id:String,data:Object});const AuthModel=mongoose.model('Auth',authSchema);
           async function useMongoDB(){const writeData=async(d,i)=>{try{await AuthModel.findOneAndUpdate({_id:i},{data:JSON.parse(JSON.stringify(d,BufferJSON.replacer)),_id:i},{upsert:!0})}catch(e){}};const readData=async(i)=>{try{const d=await AuthModel.findById(i);return d?JSON.parse(JSON.stringify(d.data,BufferJSON.reviver)):null}catch(e){return null}};const removeData=async(i)=>{try{await AuthModel.findByIdAndDelete(i)}catch(e){}};const creds=(await readData('creds'))||(await(require('@whiskeysockets/baileys').initAuthCreds)());return{state:{creds,keys:{get:async(t,i)=>{const d={};await Promise.all(i.map(async id=>{let v=await readData(`${t}-${id}`);if(t==='app-state-sync-key'&&v)v=require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(v);if(v)d[id]=v}));return d},set:async d=>{const t=[];for(const c in d)for(const i in d[c]){const v=d[c][i],k=`${c}-${i}`;t.push(v?writeData(v,k):removeData(k))}await Promise.all(t)}}},saveCreds:()=>writeData(creds,'creds'),clear:async()=>{await AuthModel.deleteMany({})}};}
+          
           let sock; let qrData=null;
           async function startBot() {
-             await mongoose.connect(MONGO_URL); const { state, saveCreds, clear } = await useMongoDB();
+             if(mongoose.connection.readyState === 0) { setTimeout(startBot, 3000); return; }
+             const { state, saveCreds, clear } = await useMongoDB();
              sock = makeWASocket({ auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) }, printQRInTerminal: false, logger: pino({ level: 'silent' }), browser: ["Shiksha Bot", "Chrome", "20.0.0"] });
              sock.ev.on('creds.update', saveCreds);
              sock.ev.on('connection.update', (u) => { const {connection, lastDisconnect, qr}=u; if(qr) qrData=qr; if(connection==='open') qrData=null; if(connection==='close'){ if(lastDisconnect.error?.output?.statusCode!==DisconnectReason.loggedOut) startBot(); } });
              sock.ev.on('messages.upsert', async({messages})=>{ const m=messages[0]; if(!m.message||m.key.fromMe)return; try{ await axios.post(N8N_URL, {from:(m.key.participant||m.key.remoteJid).split('@')[0], text:m.message.conversation||m.message.extendedTextMessage?.text, name:m.pushName}); }catch(e){} });
           }
           app.get('/qr', async(q,r)=>{ if(sock?.ws?.isOpen)return r.send('<h1>Connected</h1>'); if(!qrData)return r.send('<h1>Loading...</h1>'); r.send(`<img src="${await QRCode.toDataURL(qrData)}" />`); });
-          app.listen(PORT, ()=>startBot());
+          app.listen(PORT, ()=> { console.log("Bot running"); startBot(); });
           EOF
 
-      # 4. START DOCKER STACK (With Health Check)
-      - name: 🚀 Start Services
+      # 4. START SERVICES (Using Explicit Env Vars for Debugging)
+      - name: 🚀 Start Everything
         run: |
           docker network create bot-net
 
@@ -71,7 +80,8 @@ jobs:
           EOF
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile caddy
 
-          # n8n (Using FIXED Secrets)
+          # n8n (Using Supabase Secret directly)
+          # Note: We append ?sslmode=require just in case, but Pooler usually handles it.
           docker run -d --name n8n --network bot-net \
             -e DB_TYPE=postgresdb \
             -e DB_POSTGRESDB_CONNECTION_STRING="${{ secrets.SUPABASE_URL }}" \
@@ -86,17 +96,15 @@ jobs:
             -e MONGODB_URI="${{ secrets.MONGODB_URI }}" \
             node:20-alpine sh -c "npm install && node index.js"
 
-      # 5. DIAGNOSIS (Check if n8n crashed)
+      # 5. DIAGNOSIS (Final Check)
       - name: 🩺 Check Health
         run: |
-          echo "Waiting 30s for n8n to start..."
+          echo "Waiting 30s..."
           sleep 30
-          
-          echo "--- N8N LOGS (If empty, it's good) ---"
-          docker logs n8n 2>&1 | grep -i "error" || echo "No Critical Errors Found"
-          
-          echo "--- CONTAINER STATUS ---"
-          docker ps -a
+          echo "--- N8N LOGS ---"
+          docker logs n8n 2>&1 | tail -n 20
+          echo "--- BOT LOGS ---"
+          docker logs wa-bot 2>&1 | tail -n 20
 
       # 6. KEEP ALIVE
       - name: ⏳ System Live

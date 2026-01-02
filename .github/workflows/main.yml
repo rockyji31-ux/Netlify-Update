@@ -1,86 +1,92 @@
-name: Step 2 - Real Bot (QR Test)
+name: Final Master System (v13)
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *' # 6 घंटे बाद ऑटो-रीस्टार्ट
 
 jobs:
-  real-bot-setup:
+  deploy-production:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 355
     
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # 1. Start Ngrok (Tunneling Port 10000)
-      - name: 🚇 Start Ngrok
+      # ----------------------------------------------------------------
+      # 1. START NGROK (Static Domain)
+      # ----------------------------------------------------------------
+      - name: 🚇 Start Ngrok Tunnel
         run: |
           curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
           echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
           sudo apt update && sudo apt install ngrok
           ngrok config add-authtoken ${{ secrets.NGROK_TOKEN }}
-          ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 10000 > ngrok.log &
+          
+          # Tunnel Port 80 (Caddy)
+          ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > ngrok.log &
           sleep 5
 
-      # 2. Update Netlify (To Point to Ngrok)
+      # ----------------------------------------------------------------
+      # 2. UPDATE NETLIFY (Redirects)
+      # ----------------------------------------------------------------
       - name: 🌐 Update Netlify
         run: |
           npm install -g netlify-cli
           rm -rf public && mkdir public
-          echo '<h1>Bot Initializing...</h1>' > public/index.html
+          
+          # Homepage text (Loading...)
+          echo '<h1>System Loading...</h1>' > public/index.html
+          
+          # Traffic Rules: All traffic goes to Ngrok
           echo "/* https://${{ secrets.NGROK_DOMAIN }}/:splat 200!" > public/_redirects
+          
           netlify deploy --prod --site ${{ secrets.NETLIFY_SITE_ID }} --auth ${{ secrets.NETLIFY_TOKEN }} --dir=public
 
-      # 3. Install & Start Real WhatsApp Bot (Directly on Runner)
-      - name: 🤖 Run Real Bot
-        env:
-          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+      # ----------------------------------------------------------------
+      # 3. SETUP WHATSAPP BOT (Fixed Code)
+      # ----------------------------------------------------------------
+      - name: 📝 Create Bot Files
         run: |
           mkdir whatsapp
-          cd whatsapp
           
-          # Initialize & Install Real Libraries
-          npm init -y
-          npm install @whiskeysockets/baileys axios express mongoose qrcode pino node-cache
-          
-          # Create The Bot File
-          cat << 'EOF' > index.js
+          # package.json
+          echo '{"name":"wa-bot","main":"index.js","scripts":{"start":"node index.js"},"dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
+
+          # index.js (Cleaned - No Warning)
+          cat << 'EOF' > whatsapp/index.js
           const { default: makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, DisconnectReason, BufferJSON } = require('@whiskeysockets/baileys');
-          const express = require('express');
-          const mongoose = require('mongoose');
-          const QRCode = require('qrcode');
-          const pino = require('pino');
-          const NodeCache = require('node-cache');
+          const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino'); const NodeCache = require('node-cache');
           
-          const app = express();
+          const app = express(); app.use(express.json());
+          const PORT = 10000;
           const MONGO_URL = process.env.MONGODB_URI;
-          
-          // --- MONGODB CONNECTION ---
-          if (!MONGO_URL) { console.error("❌ MONGODB_URI Missing!"); process.exit(1); }
-          const authSchema = new mongoose.Schema({ _id: String, data: Object });
-          const AuthModel = mongoose.model('Auth', authSchema);
-          
-          async function useMongoDB() {
-              const writeData = async (data, id) => { try { await AuthModel.findOneAndUpdate({ _id: id }, { data: JSON.parse(JSON.stringify(data, BufferJSON.replacer)), _id: id }, { upsert: true }); } catch (err) {} };
-              const readData = async (id) => { try { const doc = await AuthModel.findById(id); return doc ? JSON.parse(JSON.stringify(doc.data), BufferJSON.reviver) : null; } catch (err) { return null; } };
-              const removeData = async (id) => { try { await AuthModel.findByIdAndDelete(id); } catch (err) {} };
-              const creds = (await readData('creds')) || (await (require('@whiskeysockets/baileys').initAuthCreds)());
-              return { state: { creds, keys: { get: async (type, ids) => { const data = {}; await Promise.all(ids.map(async (id) => { let val = await readData(`${type}-${id}`); if (type === 'app-state-sync-key' && val) val = require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(val); if (val) data[id] = val; })); return data; }, set: async (data) => { const tasks = []; for (const cat in data) for (const id in data[cat]) { const val = data[cat][id]; const key = `${cat}-${id}`; tasks.push(val ? writeData(val, key) : removeData(key)); } await Promise.all(tasks); } } }, saveCreds: () => writeData(creds, 'creds'), clear: async () => { await AuthModel.deleteMany({}); } };
+          // IMPORTANT: Bot talks to n8n internally via Docker name "n8n"
+          const N8N_URL = "http://n8n:5678/webhook/whatsapp"; 
+
+          // --- MongoDB Auth Logic ---
+          if(!MONGO_URL){console.error("❌ DB Missing");process.exit(1);}
+          const authSchema = new mongoose.Schema({_id:String,data:Object});const AuthModel=mongoose.model('Auth',authSchema);
+          async function useMongoDB(){
+             const writeData=async(data,id)=>{try{await AuthModel.findOneAndUpdate({_id:id},{data:JSON.parse(JSON.stringify(data,BufferJSON.replacer)),_id:id},{upsert:!0})}catch(e){}};
+             const readData=async(id)=>{try{const d=await AuthModel.findById(id);return d?JSON.parse(JSON.stringify(d.data,BufferJSON.reviver)):null}catch(e){return null}};
+             const removeData=async(id)=>{try{await AuthModel.findByIdAndDelete(id)}catch(e){}};
+             const creds=(await readData('creds'))||(await(require('@whiskeysockets/baileys').initAuthCreds)());
+             return{state:{creds,keys:{get:async(t,i)=>{const d={};await Promise.all(i.map(async id=>{let v=await readData(`${t}-${id}`);if(t==='app-state-sync-key'&&v)v=require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(v);if(v)d[id]=v}));return d},set:async d=>{const t=[];for(const c in d)for(const i in d[c]){const v=d[c][i],k=`${c}-${i}`;t.push(v?writeData(v,k):removeData(k))}await Promise.all(t)}}},saveCreds:()=>writeData(creds,'creds'),clear:async()=>{await AuthModel.deleteMany({})}};
           }
 
-          let sock;
-          let qrData = null;
+          let sock; let qrData = null;
           
           async function startBot() {
               await mongoose.connect(MONGO_URL);
-              console.log("✅ DB Connected");
-              
-              const { state, saveCreds } = await useMongoDB();
+              const { state, saveCreds, clear } = await useMongoDB();
               
               sock = makeWASocket({
                   auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) },
-                  printQRInTerminal: true,
+                  printQRInTerminal: false, // FIXED: Warning Removed
                   logger: pino({ level: 'silent' }),
-                  browser: ["GitHub Bot", "Chrome", "20.0.0"]
+                  browser: ["Shiksha Bot", "Chrome", "20.0.0"]
               });
               
               sock.ev.on('creds.update', saveCreds);
@@ -89,26 +95,90 @@ jobs:
                   if(qr) qrData = qr;
                   if(connection === 'open') { qrData = null; console.log("✅ WhatsApp Connected!"); }
                   if(connection === 'close') {
-                      const shouldReconnect = lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut;
-                      if(shouldReconnect) startBot();
+                      const code = lastDisconnect.error?.output?.statusCode;
+                      if(code === DisconnectReason.loggedOut) clear();
+                      else startBot();
                   }
               });
+              
+              sock.ev.on('messages.upsert', async ({ messages }) => {
+                  const msg = messages[0];
+                  if(!msg.message || msg.key.fromMe) return;
+                  try {
+                      const from = (msg.key.participant || msg.key.remoteJid).split('@')[0];
+                      const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
+                      // Send to n8n (Internal)
+                      await axios.post(N8N_URL, { from, text, name: msg.pushName });
+                  } catch (e) { /* n8n might be sleeping, ignore */ }
+              });
           }
-          
-          app.get('/qr', async (req, res) => {
-             if (sock?.ws?.isOpen) return res.send('<h1 style="color:green">✅ Connected! Bot is Ready.</h1>');
-             if (!qrData) return res.send('<h1>Starting... Please refresh in 5 seconds.</h1>');
-             const url = await QRCode.toDataURL(qrData);
-             res.send(`<div style="text-align:center"><h1>Scan This QR</h1><img src="${url}" width="300"/></div>`);
+
+          // API for n8n to send messages
+          app.post('/send', async (req, res) => {
+              try {
+                  const { number, message } = req.body;
+                  const jid = number.includes('@') ? number : `${number}@s.whatsapp.net`;
+                  await sock.sendMessage(jid, { text: message });
+                  res.json({ status: true });
+              } catch (e) { res.status(500).json({ error: e.message }); }
           });
-          
-          app.get('/', (req, res) => res.send('Bot Server Running'));
-          
-          app.listen(10000, () => {
-              console.log("Server on 10000");
+
+          // QR Page
+          app.get('/qr', async (req, res) => {
+              if (sock?.ws?.isOpen) return res.send('<h1>✅ Already Connected!</h1>');
+              if (!qrData) return res.send('<h1>⏳ Starting... Refresh in 5s</h1>');
+              const url = await QRCode.toDataURL(qrData);
+              res.send(`<div style="text-align:center"><h1>Scan QR</h1><img src="${url}" /></div>`);
+          });
+
+          app.listen(PORT, () => {
+              console.log("Bot running on 10000");
               startBot();
           });
           EOF
-          
-          # Start Node
-          node index.js
+
+      # ----------------------------------------------------------------
+      # 4. START DOCKER STACK (Caddy + n8n + Bot)
+      # ----------------------------------------------------------------
+      - name: 🚀 Start Everything
+        run: |
+          docker network create bot-net
+
+          # Caddy Configuration (The Router)
+          # /qr -> Bot
+          # Everything else -> n8n Dashboard
+          cat << 'EOF' > Caddyfile
+          :80 {
+            reverse_proxy /qr wa-bot:10000
+            reverse_proxy /send wa-bot:10000
+            reverse_proxy /* n8n:5678
+          }
+          EOF
+
+          # 1. Start Caddy
+          docker run -d --name caddy --network bot-net -p 80:80 \
+            -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile caddy
+
+          # 2. Start n8n
+          docker run -d --name n8n --network bot-net \
+            -e DB_TYPE=postgresdb \
+            -e DB_POSTGRESDB_CONNECTION_STRING="${{ secrets.SUPABASE_URL }}" \
+            -e N8N_ENCRYPTION_KEY="mysuperkey" \
+            -e N8N_SECURE_COOKIE=false \
+            -e WEBHOOK_URL="https://shikshaportal.netlify.app/" \
+            n8nio/n8n
+
+          # 3. Start Bot
+          docker run -d --name wa-bot --network bot-net \
+            -v $(pwd)/whatsapp:/app -w /app \
+            -e MONGODB_URI="${{ secrets.MONGODB_URI }}" \
+            node:20-alpine sh -c "npm install && node index.js"
+
+      # ----------------------------------------------------------------
+      # 5. KEEP ALIVE
+      # ----------------------------------------------------------------
+      - name: ⏳ System Live
+        run: |
+          echo "✅ Access n8n here: https://shikshaportal.netlify.app/"
+          echo "✅ Access QR here:  https://shikshaportal.netlify.app/qr"
+          sleep 21300

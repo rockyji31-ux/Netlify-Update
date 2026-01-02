@@ -1,0 +1,51 @@
+name: Test Netlify & Ngrok Connection
+
+on: workflow_dispatch
+
+jobs:
+  test-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # 1. Start Ngrok (Using YOUR Static Domain)
+      - name: 🚇 Start Ngrok Tunnel
+        run: |
+          # Install Ngrok
+          curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+          echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+          sudo apt update && sudo apt install ngrok
+
+          # Authenticate
+          ngrok config add-authtoken ${{ secrets.NGROK_TOKEN }}
+
+          # Start Tunnel on Static Domain (Port 8080 for test)
+          # We run in background (&) so the script continues
+          ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 8080 > ngrok.log &
+          
+          echo "⏳ Waiting for Ngrok to initialize..."
+          sleep 5
+          cat ngrok.log
+
+      # 2. Update Netlify Redirects (Pointing to YOUR Static Domain)
+      - name: 🌐 Update Netlify Redirects
+        run: |
+          npm install -g netlify-cli
+
+          # Create Redirect Rule
+          # Logic: ShikshaPortal -> Redirect -> Ngrok Static Domain
+          echo "/webhook/* https://${{ secrets.NGROK_DOMAIN }}/webhook/:splat  200!" > _redirects
+          echo "/* https://${{ secrets.NGROK_DOMAIN }}/:splat  200!" >> _redirects
+
+          # Deploy to Netlify
+          # --prod flag means it goes live immediately
+          netlify deploy --prod --site ${{ secrets.NETLIFY_SITE_ID }} --auth ${{ secrets.NETLIFY_TOKEN }} --dir=.
+
+      - name: ✅ Verification
+        run: |
+          echo "=================================================="
+          echo "🎉 SUCCESS! Setup Verified."
+          echo "Test Link: https://shikshaportal.netlify.app/webhook/test"
+          echo "Routing: Netlify -> Ngrok (${{ secrets.NGROK_DOMAIN }})"
+          echo "=================================================="

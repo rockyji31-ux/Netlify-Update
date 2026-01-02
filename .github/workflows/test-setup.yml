@@ -1,4 +1,4 @@
-name: Debug Netlify & Ngrok
+name: Debug Netlify (Fix Folder)
 
 on: workflow_dispatch
 
@@ -9,7 +9,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # 1. Start Ngrok (Using YOUR Static Domain)
+      # 1. Start Ngrok (Background)
       - name: 🚇 Start Ngrok Tunnel
         run: |
           curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
@@ -17,34 +17,36 @@ jobs:
           sudo apt update && sudo apt install ngrok
           ngrok config add-authtoken ${{ secrets.NGROK_TOKEN }}
 
-          # Start Tunnel
+          # Start tunnel on port 8080 (dummy port for test)
           ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 8080 > ngrok.log &
           sleep 5
-          cat ngrok.log
 
-      # 2. Create Site Files & Redirects
-      - name: 📝 Create Netlify Files
+      # 2. Create Distribution Folder (CLEAN SETUP)
+      - name: 📂 Prepare Dist Folder
         run: |
-          mkdir build
-          
-          # Create a dummy index.html so site isn't empty
-          echo "<h1>Netlify is Active!</h1><p>Redirects should work.</p>" > build/index.html
-          
-          # Create Redirects File (IMPORTANT: Moved to build folder)
-          # We redirect EVERYTHING to Ngrok
-          echo "/* https://${{ secrets.NGROK_DOMAIN }}/:splat  200!" > build/_redirects
-          
-          echo "📄 Content of _redirects:"
-          cat build/_redirects
+          # Clean slate
+          rm -rf dist
+          mkdir dist
 
-      # 3. Deploy to Netlify
-      - name: 🚀 Deploy
+          # 1. Create Redirects inside dist
+          # Redirect EVERYTHING to Ngrok
+          echo "/* https://${{ secrets.NGROK_DOMAIN }}/:splat  200!" > dist/_redirects
+
+          # 2. Create Index inside dist (Fallback)
+          echo "<h1>Netlify is Working!</h1><p>If you see this, redirect failed.</p>" > dist/index.html
+
+          # Verify
+          echo "--- _redirects content ---"
+          cat dist/_redirects
+
+      # 3. Deploy ONLY the dist folder
+      - name: 🚀 Deploy to Netlify
         run: |
           npm install -g netlify-cli
-          # Deploy the 'build' folder
-          netlify deploy --prod --site ${{ secrets.NETLIFY_SITE_ID }} --auth ${{ secrets.NETLIFY_TOKEN }} --dir=build
+          # Important: We deploy the 'dist' folder explicitly
+          netlify deploy --prod --site ${{ secrets.NETLIFY_SITE_ID }} --auth ${{ secrets.NETLIFY_TOKEN }} --dir=dist
 
-      - name: ✅ Verify
+      - name: ✅ Check Links
         run: |
-          echo "Test Link 1 (Should show Ngrok Error): https://shikshaportal.netlify.app/webhook/test"
-          echo "Test Link 2 (Should show Ngrok Error): https://shikshaportal.netlify.app/any-random-path"
+          echo "Test Link: https://shikshaportal.netlify.app/webhook/test"
+          echo "Expected: Ngrok Error Page (502 Bad Gateway)"

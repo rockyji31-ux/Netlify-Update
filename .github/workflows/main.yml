@@ -1,12 +1,10 @@
-name: Final Master System (v13)
+name: Fixed Production v14 (Simple Password)
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 */6 * * *' # 6 घंटे बाद ऑटो-रीस्टार्ट
 
 jobs:
-  deploy-production:
+  deploy-stack:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     
@@ -14,171 +12,94 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # ----------------------------------------------------------------
-      # 1. START NGROK (Static Domain)
-      # ----------------------------------------------------------------
-      - name: 🚇 Start Ngrok Tunnel
+      # 1. START NGROK
+      - name: 🚇 Start Ngrok
         run: |
           curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
           echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
           sudo apt update && sudo apt install ngrok
           ngrok config add-authtoken ${{ secrets.NGROK_TOKEN }}
-          
-          # Tunnel Port 80 (Caddy)
           ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > ngrok.log &
           sleep 5
 
-      # ----------------------------------------------------------------
-      # 2. UPDATE NETLIFY (Redirects)
-      # ----------------------------------------------------------------
+      # 2. UPDATE NETLIFY
       - name: 🌐 Update Netlify
         run: |
           npm install -g netlify-cli
           rm -rf public && mkdir public
-          
-          # Homepage text (Loading...)
-          echo '<h1>System Loading...</h1>' > public/index.html
-          
-          # Traffic Rules: All traffic goes to Ngrok
+          echo '<h1>System Loading... (Wait 60s)</h1>' > public/index.html
           echo "/* https://${{ secrets.NGROK_DOMAIN }}/:splat 200!" > public/_redirects
-          
           netlify deploy --prod --site ${{ secrets.NETLIFY_SITE_ID }} --auth ${{ secrets.NETLIFY_TOKEN }} --dir=public
 
-      # ----------------------------------------------------------------
-      # 3. SETUP WHATSAPP BOT (Fixed Code)
-      # ----------------------------------------------------------------
-      - name: 📝 Create Bot Files
+      # 3. CREATE BOT FILES
+      - name: 📝 Setup Files
         run: |
           mkdir whatsapp
-          
-          # package.json
           echo '{"name":"wa-bot","main":"index.js","scripts":{"start":"node index.js"},"dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
-
-          # index.js (Cleaned - No Warning)
+          
           cat << 'EOF' > whatsapp/index.js
           const { default: makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, DisconnectReason, BufferJSON } = require('@whiskeysockets/baileys');
-          const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino'); const NodeCache = require('node-cache');
-          
+          const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino');
           const app = express(); app.use(express.json());
-          const PORT = 10000;
-          const MONGO_URL = process.env.MONGODB_URI;
-          // IMPORTANT: Bot talks to n8n internally via Docker name "n8n"
-          const N8N_URL = "http://n8n:5678/webhook/whatsapp"; 
-
-          // --- MongoDB Auth Logic ---
+          const PORT = 10000; const MONGO_URL = process.env.MONGODB_URI; const N8N_URL = "http://n8n:5678/webhook/whatsapp"; 
           if(!MONGO_URL){console.error("❌ DB Missing");process.exit(1);}
-          const authSchema = new mongoose.Schema({_id:String,data:Object});const AuthModel=mongoose.model('Auth',authSchema);
-          async function useMongoDB(){
-             const writeData=async(data,id)=>{try{await AuthModel.findOneAndUpdate({_id:id},{data:JSON.parse(JSON.stringify(data,BufferJSON.replacer)),_id:id},{upsert:!0})}catch(e){}};
-             const readData=async(id)=>{try{const d=await AuthModel.findById(id);return d?JSON.parse(JSON.stringify(d.data,BufferJSON.reviver)):null}catch(e){return null}};
-             const removeData=async(id)=>{try{await AuthModel.findByIdAndDelete(id)}catch(e){}};
-             const creds=(await readData('creds'))||(await(require('@whiskeysockets/baileys').initAuthCreds)());
-             return{state:{creds,keys:{get:async(t,i)=>{const d={};await Promise.all(i.map(async id=>{let v=await readData(`${t}-${id}`);if(t==='app-state-sync-key'&&v)v=require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(v);if(v)d[id]=v}));return d},set:async d=>{const t=[];for(const c in d)for(const i in d[c]){const v=d[c][i],k=`${c}-${i}`;t.push(v?writeData(v,k):removeData(k))}await Promise.all(t)}}},saveCreds:()=>writeData(creds,'creds'),clear:async()=>{await AuthModel.deleteMany({})}};
-          }
-
-          let sock; let qrData = null;
-          
+          const authSchema=new mongoose.Schema({_id:String,data:Object});const AuthModel=mongoose.model('Auth',authSchema);
+          async function useMongoDB(){const writeData=async(d,i)=>{try{await AuthModel.findOneAndUpdate({_id:i},{data:JSON.parse(JSON.stringify(d,BufferJSON.replacer)),_id:i},{upsert:!0})}catch(e){}};const readData=async(i)=>{try{const d=await AuthModel.findById(i);return d?JSON.parse(JSON.stringify(d.data,BufferJSON.reviver)):null}catch(e){return null}};const removeData=async(i)=>{try{await AuthModel.findByIdAndDelete(i)}catch(e){}};const creds=(await readData('creds'))||(await(require('@whiskeysockets/baileys').initAuthCreds)());return{state:{creds,keys:{get:async(t,i)=>{const d={};await Promise.all(i.map(async id=>{let v=await readData(`${t}-${id}`);if(t==='app-state-sync-key'&&v)v=require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(v);if(v)d[id]=v}));return d},set:async d=>{const t=[];for(const c in d)for(const i in d[c]){const v=d[c][i],k=`${c}-${i}`;t.push(v?writeData(v,k):removeData(k))}await Promise.all(t)}}},saveCreds:()=>writeData(creds,'creds'),clear:async()=>{await AuthModel.deleteMany({})}};}
+          let sock; let qrData=null;
           async function startBot() {
-              await mongoose.connect(MONGO_URL);
-              const { state, saveCreds, clear } = await useMongoDB();
-              
-              sock = makeWASocket({
-                  auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) },
-                  printQRInTerminal: false, // FIXED: Warning Removed
-                  logger: pino({ level: 'silent' }),
-                  browser: ["Shiksha Bot", "Chrome", "20.0.0"]
-              });
-              
-              sock.ev.on('creds.update', saveCreds);
-              sock.ev.on('connection.update', (update) => {
-                  const { connection, lastDisconnect, qr } = update;
-                  if(qr) qrData = qr;
-                  if(connection === 'open') { qrData = null; console.log("✅ WhatsApp Connected!"); }
-                  if(connection === 'close') {
-                      const code = lastDisconnect.error?.output?.statusCode;
-                      if(code === DisconnectReason.loggedOut) clear();
-                      else startBot();
-                  }
-              });
-              
-              sock.ev.on('messages.upsert', async ({ messages }) => {
-                  const msg = messages[0];
-                  if(!msg.message || msg.key.fromMe) return;
-                  try {
-                      const from = (msg.key.participant || msg.key.remoteJid).split('@')[0];
-                      const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
-                      // Send to n8n (Internal)
-                      await axios.post(N8N_URL, { from, text, name: msg.pushName });
-                  } catch (e) { /* n8n might be sleeping, ignore */ }
-              });
+             await mongoose.connect(MONGO_URL); const { state, saveCreds, clear } = await useMongoDB();
+             sock = makeWASocket({ auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) }, printQRInTerminal: false, logger: pino({ level: 'silent' }), browser: ["Shiksha Bot", "Chrome", "20.0.0"] });
+             sock.ev.on('creds.update', saveCreds);
+             sock.ev.on('connection.update', (u) => { const {connection, lastDisconnect, qr}=u; if(qr) qrData=qr; if(connection==='open') qrData=null; if(connection==='close'){ if(lastDisconnect.error?.output?.statusCode!==DisconnectReason.loggedOut) startBot(); } });
+             sock.ev.on('messages.upsert', async({messages})=>{ const m=messages[0]; if(!m.message||m.key.fromMe)return; try{ await axios.post(N8N_URL, {from:(m.key.participant||m.key.remoteJid).split('@')[0], text:m.message.conversation||m.message.extendedTextMessage?.text, name:m.pushName}); }catch(e){} });
           }
-
-          // API for n8n to send messages
-          app.post('/send', async (req, res) => {
-              try {
-                  const { number, message } = req.body;
-                  const jid = number.includes('@') ? number : `${number}@s.whatsapp.net`;
-                  await sock.sendMessage(jid, { text: message });
-                  res.json({ status: true });
-              } catch (e) { res.status(500).json({ error: e.message }); }
-          });
-
-          // QR Page
-          app.get('/qr', async (req, res) => {
-              if (sock?.ws?.isOpen) return res.send('<h1>✅ Already Connected!</h1>');
-              if (!qrData) return res.send('<h1>⏳ Starting... Refresh in 5s</h1>');
-              const url = await QRCode.toDataURL(qrData);
-              res.send(`<div style="text-align:center"><h1>Scan QR</h1><img src="${url}" /></div>`);
-          });
-
-          app.listen(PORT, () => {
-              console.log("Bot running on 10000");
-              startBot();
-          });
+          app.get('/qr', async(q,r)=>{ if(sock?.ws?.isOpen)return r.send('<h1>Connected</h1>'); if(!qrData)return r.send('<h1>Loading...</h1>'); r.send(`<img src="${await QRCode.toDataURL(qrData)}" />`); });
+          app.listen(PORT, ()=>startBot());
           EOF
 
-      # ----------------------------------------------------------------
-      # 4. START DOCKER STACK (Caddy + n8n + Bot)
-      # ----------------------------------------------------------------
-      - name: 🚀 Start Everything
+      # 4. START DOCKER STACK (With Health Check)
+      - name: 🚀 Start Services
         run: |
           docker network create bot-net
 
-          # Caddy Configuration (The Router)
-          # /qr -> Bot
-          # Everything else -> n8n Dashboard
+          # Caddy
           cat << 'EOF' > Caddyfile
           :80 {
             reverse_proxy /qr wa-bot:10000
-            reverse_proxy /send wa-bot:10000
             reverse_proxy /* n8n:5678
           }
           EOF
+          docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile caddy
 
-          # 1. Start Caddy
-          docker run -d --name caddy --network bot-net -p 80:80 \
-            -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile caddy
-
-          # 2. Start n8n
+          # n8n (Using FIXED Secrets)
           docker run -d --name n8n --network bot-net \
             -e DB_TYPE=postgresdb \
             -e DB_POSTGRESDB_CONNECTION_STRING="${{ secrets.SUPABASE_URL }}" \
-            -e N8N_ENCRYPTION_KEY="mysuperkey" \
+            -e N8N_ENCRYPTION_KEY="kuchbhi123" \
             -e N8N_SECURE_COOKIE=false \
             -e WEBHOOK_URL="https://shikshaportal.netlify.app/" \
             n8nio/n8n
 
-          # 3. Start Bot
+          # Bot
           docker run -d --name wa-bot --network bot-net \
             -v $(pwd)/whatsapp:/app -w /app \
             -e MONGODB_URI="${{ secrets.MONGODB_URI }}" \
             node:20-alpine sh -c "npm install && node index.js"
 
-      # ----------------------------------------------------------------
-      # 5. KEEP ALIVE
-      # ----------------------------------------------------------------
+      # 5. DIAGNOSIS (Check if n8n crashed)
+      - name: 🩺 Check Health
+        run: |
+          echo "Waiting 30s for n8n to start..."
+          sleep 30
+          
+          echo "--- N8N LOGS (If empty, it's good) ---"
+          docker logs n8n 2>&1 | grep -i "error" || echo "No Critical Errors Found"
+          
+          echo "--- CONTAINER STATUS ---"
+          docker ps -a
+
+      # 6. KEEP ALIVE
       - name: ⏳ System Live
         run: |
-          echo "✅ Access n8n here: https://shikshaportal.netlify.app/"
-          echo "✅ Access QR here:  https://shikshaportal.netlify.app/qr"
+          echo "✅ URL: https://shikshaportal.netlify.app"
           sleep 21300

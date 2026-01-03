@@ -1,4 +1,4 @@
-name: Production v30 (QR Logic Fix)
+name: Production v31 (Full Data Fix)
 
 on:
   workflow_dispatch:
@@ -53,7 +53,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: node sync.js down
 
-      # 4. CREATE BOT (FIXED LOGIC)
+      # 4. CREATE BOT (With FULL DATA LOGIC)
       - name: 📝 Create Bot
         run: |
           mkdir whatsapp
@@ -139,11 +139,18 @@ jobs:
                           else { setTimeout(start, 3000); }
                       }
                   });
+                  
+                  // 🔥 FIXED: Sending Full JSON Data 🔥
                   sock.ev.on('messages.upsert', async ({ messages }) => {
                       const msg = messages[0]; if(!msg.message || msg.key.fromMe) return;
                       try {
                           const realNumber = (msg.key.participant || msg.key.remoteJid).split('@')[0];
-                          await axios.post(N8N_URL, { from: realNumber, text: msg.message.conversation || msg.message.extendedTextMessage?.text, name: msg.pushName });
+                          await axios.post(N8N_URL, { 
+                              from: realNumber, 
+                              text: msg.message.conversation || msg.message.extendedTextMessage?.text, 
+                              name: msg.pushName,
+                              full_json: msg // <--- Added This Line
+                          });
                       } catch (e) {}
                   });
 
@@ -160,16 +167,11 @@ jobs:
               } catch (e) { res.status(500).json({ error: e.message }); }
           });
 
-          // 🔥 FIXED QR LOGIC 🔥
           app.get('/qr', async (req, res) => {
-              // Only say "Connected" if User is actually logged in
               if(sock?.user && !qrData) return res.send('<h1>✅ Connected!</h1><a href="/reset">Reset</a>');
-              
-              // If not logged in, show QR (even if socket is open)
               if(!qrData) return res.send('<h1>⏳ Generating QR... Refresh in 5s</h1>');
-              
               const url = await QRCode.toDataURL(qrData);
-              res.send(`<div style="text-align:center"><h1>Scan This (v30)</h1><img src="${url}" /><br/><a href="/reset">Reset Database</a></div>`);
+              res.send(`<div style="text-align:center"><h1>Scan This (v31)</h1><img src="${url}" /><br/><a href="/reset">Reset Database</a></div>`);
           });
 
           app.get('/reset', async (req, res) => {

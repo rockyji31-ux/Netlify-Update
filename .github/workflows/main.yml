@@ -1,4 +1,4 @@
-name: Production v26 (Sync Fixed)
+name: Production v27 (New Identity v3)
 
 on:
   workflow_dispatch:
@@ -24,19 +24,17 @@ jobs:
           ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > ngrok.log &
           sleep 5
 
-      # 2. SETUP SYNC ENGINE (FIXED URL)
+      # 2. SETUP SYNC ENGINE
       - name: 🔮 Setup Engine
         run: |
           npm install @supabase/supabase-js
           mkdir -p n8n_data && chmod 777 n8n_data
           
-          # FIXED: Hardcoded Project URL for Storage API
           cat << 'EOF' > sync.js
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
           const path = 'n8n_data/database.sqlite';
-          
-          // Using your Project URL directly to avoid Secret conflict
+          // Hardcoded Project URL
           const supabaseUrl = 'https://ymatdzammnejrmmiyygg.supabase.co';
           const supabase = createClient(supabaseUrl, process.env.SUPABASE_KEY);
           
@@ -64,7 +62,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: node sync.js down
 
-      # 4. CREATE BOT (With NEW Session Key v2)
+      # 4. CREATE BOT (With NEW Session Key v3)
       - name: 📝 Create Bot
         run: |
           mkdir whatsapp
@@ -78,8 +76,9 @@ jobs:
           const PORT = 10000; 
           const N8N_URL = "http://n8n:5678/webhook/whatsapp"; 
           const MONGO_URL = process.env.MONGODB_URI;
-          // 🔥 NEW SESSION NAME v2
-          const SESSION_KEY = 'creds_fresh_v2'; 
+          
+          // 🔥 NEW SESSION ID v3 (Fresh Start)
+          const SESSION_KEY = 'creds_fresh_v3'; 
 
           const connectDB = async () => { try { await mongoose.connect(MONGO_URL); console.log("✅ Mongo Connected"); } catch (e) { setTimeout(connectDB, 5000); } }; connectDB();
           const authSchema=new mongoose.Schema({_id:String,data:Object});const AuthModel=mongoose.model('Auth',authSchema);
@@ -98,10 +97,11 @@ jobs:
              const { state, saveCreds, clear } = await useMongoDB();
              
              global.resetBot = async () => {
-                 console.log("⚠️ NUKE RESET...");
+                 console.log("⚠️ RESET REQUESTED...");
                  if(sock) sock.end(undefined);
-                 await clear();
-                 process.exit(0);
+                 // Delete ONLY current session
+                 await AuthModel.findByIdAndDelete(SESSION_KEY);
+                 process.exit(0); // Restart Container
              };
 
              sock = makeWASocket({ auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) }, printQRInTerminal: false, logger: pino({ level: 'silent' }), browser: ["Shiksha Bot", "Chrome", "20.0.0"] });
@@ -112,9 +112,9 @@ jobs:
 
           app.post('/send', async (req, res) => { try { if(!sock) return res.status(503).json({error:"Bot loading"}); const jid = req.body.number.includes('@') ? req.body.number : req.body.number + "@s.whatsapp.net"; await sock.sendMessage(jid, { text: req.body.message }); res.json({ status: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
           
-          app.get('/qr', async(q,r)=>{ if(sock?.ws?.isOpen)return r.send(`<h1>✅ Connected!</h1><p>Active Session: ${SESSION_KEY}</p><a href="/reset" style="color:red">FORCE LOGOUT</a>`); if(!qrData)return r.send('<h1>⏳ Generating New QR...</h1>'); r.send(`<div style="text-align:center"><h1>Scan This (v26)</h1><img src="${await QRCode.toDataURL(qrData)}" /><br/>New Session ID: ${SESSION_KEY}</div>`); });
+          app.get('/qr', async(q,r)=>{ if(sock?.ws?.isOpen)return r.send(`<h1>✅ Connected (v3)!</h1><p>Active: ${SESSION_KEY}</p><a href="/reset" style="color:red">FORCE LOGOUT</a>`); if(!qrData)return r.send('<h1>⏳ Generating New QR...</h1>'); r.send(`<div style="text-align:center"><h1>Scan This (v27)</h1><img src="${await QRCode.toDataURL(qrData)}" /><br/>Session: ${SESSION_KEY}</div>`); });
           
-          app.get('/reset', async (req, res) => { res.send("<h1>Nuking Database... Wait 10s</h1>"); if(global.resetBot) global.resetBot(); });
+          app.get('/reset', async (req, res) => { res.send("<h1>Resetting Session v3... Wait 10s</h1>"); if(global.resetBot) global.resetBot(); });
 
           app.listen(PORT, ()=> { console.log("Bot Live"); startBot(); });
           EOF

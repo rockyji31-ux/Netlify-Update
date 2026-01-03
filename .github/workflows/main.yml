@@ -1,4 +1,4 @@
-name: Production v23 (Immortal Bot)
+name: Production v24 (Reset & Fix)
 
 on:
   workflow_dispatch:
@@ -24,33 +24,28 @@ jobs:
           ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > ngrok.log &
           sleep 5
 
-      # 2. SETUP SYNC SCRIPT (For Speed)
-      - name: 🔮 Setup Speed Engine
+      # 2. SETUP SYNC ENGINE
+      - name: 🔮 Setup Engine
         run: |
           npm install @supabase/supabase-js
           mkdir -p n8n_data && chmod 777 n8n_data
-          
-          # Sync Script
           cat << 'EOF' > sync.js
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
           const path = 'n8n_data/database.sqlite';
           const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-          
           async function run(mode) {
             if(mode==='down') {
-              console.log("📥 Pulling Data...");
               const { data, error } = await supabase.storage.from('bot-storage').download('database.sqlite');
               if(!error) fs.writeFileSync(path, Buffer.from(await data.arrayBuffer()));
             } else {
-              console.log("📤 Pushing Data...");
               if(fs.existsSync(path)) await supabase.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(path), { upsert: true });
             }
           }
           run(process.argv[2]);
           EOF
 
-      # 3. RESTORE DATA (Optional - If Secret Exists)
+      # 3. RESTORE DB
       - name: 📥 Restore DB
         continue-on-error: true
         env:
@@ -58,81 +53,74 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: node sync.js down
 
-      # 4. CREATE BOT FILES (Robust)
+      # 4. CREATE BOT (With Reset Feature)
       - name: 📝 Create Bot
         run: |
           mkdir whatsapp
-          # Dependencies
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
 
-          # Index JS (Clean & Stable)
           cat << 'EOF' > whatsapp/index.js
           const { default: makeWASocket, useMultiFileAuthState, makeCacheableSignalKeyStore, DisconnectReason } = require('@whiskeysockets/baileys');
           const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino');
           const app = express(); app.use(express.json());
           
           const PORT = 10000; 
-          // Using Internal Docker DNS for n8n
           const N8N_URL = "http://n8n:5678/webhook/whatsapp"; 
           const MONGO_URL = process.env.MONGODB_URI;
 
-          // Robust DB Connection
-          const connectDB = async () => { 
-            try { await mongoose.connect(MONGO_URL); console.log("✅ Mongo Connected"); } 
-            catch (e) { console.error("❌ Mongo Fail:", e.message); setTimeout(connectDB, 5000); } 
-          }; 
-          connectDB();
-
+          const connectDB = async () => { try { await mongoose.connect(MONGO_URL); console.log("✅ Mongo Connected"); } catch (e) { setTimeout(connectDB, 5000); } }; connectDB();
           const authSchema=new mongoose.Schema({_id:String,data:Object});const AuthModel=mongoose.model('Auth',authSchema);
           async function useMongoDB(){const writeData=async(d,i)=>{try{await AuthModel.findOneAndUpdate({_id:i},{data:d,_id:i},{upsert:!0})}catch(e){}};const readData=async(i)=>{try{const d=await AuthModel.findById(i);return d?d.data:null}catch(e){return null}};const removeData=async(i)=>{try{await AuthModel.findByIdAndDelete(i)}catch(e){}};const creds=(await readData('creds'))||(await(require('@whiskeysockets/baileys').initAuthCreds)());return{state:{creds,keys:{get:async(t,i)=>{const d={};await Promise.all(i.map(async id=>{let v=await readData(`${t}-${id}`);if(t==='app-state-sync-key'&&v)v=require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(v);if(v)d[id]=v}));return d},set:async d=>{const t=[];for(const c in d)for(const i in d[c]){const v=d[c][i],k=`${c}-${i}`;t.push(v?writeData(v,k):removeData(k))}await Promise.all(t)}}},saveCreds:()=>writeData(creds,'creds'),clear:async()=>{await AuthModel.deleteMany({})}};}
 
           let sock; let qrData=null;
+          
           async function startBot() {
-             // Wait for DB before starting
              if(mongoose.connection.readyState === 0) { setTimeout(startBot, 3000); return; }
+             const { state, saveCreds, clear } = await useMongoDB();
              
-             const { state, saveCreds } = await useMongoDB();
+             // Global Reset Function
+             global.resetBot = async () => {
+                 console.log("⚠️ RESETTING BOT SESSION...");
+                 if(sock) sock.end(undefined);
+                 await clear();
+                 process.exit(0); // Restart Container
+             };
+
              sock = makeWASocket({ auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) }, printQRInTerminal: false, logger: pino({ level: 'silent' }), browser: ["Shiksha Bot", "Chrome", "20.0.0"] });
-             
              sock.ev.on('creds.update', saveCreds);
              sock.ev.on('connection.update', (u) => { const {connection, qr}=u; if(qr) qrData=qr; if(connection==='open') qrData=null; if(connection==='close') startBot(); });
-             
-             sock.ev.on('messages.upsert', async({messages})=>{ 
-                const m=messages[0]; if(!m.message||m.key.fromMe)return; 
-                try{ await axios.post(N8N_URL, {from:(m.key.participant||m.key.remoteJid).split('@')[0], text:m.message.conversation||m.message.extendedTextMessage?.text, name:m.pushName}); }
-                catch(e){ console.log("n8n offline?"); } 
-             });
+             sock.ev.on('messages.upsert', async({messages})=>{ const m=messages[0]; if(!m.message||m.key.fromMe)return; try{ await axios.post(N8N_URL, {from:(m.key.participant||m.key.remoteJid).split('@')[0], text:m.message.conversation||m.message.extendedTextMessage?.text, name:m.pushName}); }catch(e){} });
           }
 
-          app.post('/send', async (req, res) => {
-              try {
-                  if(!sock) return res.status(503).json({error:"Bot loading"});
-                  const num = req.body.number;
-                  const jid = num.includes('@') ? num : num + "@s.whatsapp.net";
-                  await sock.sendMessage(jid, { text: req.body.message });
-                  res.json({ status: true });
-              } catch (e) { res.status(500).json({ error: e.message }); }
+          app.post('/send', async (req, res) => { try { if(!sock) return res.status(503).json({error:"Bot loading"}); const jid = req.body.number.includes('@') ? req.body.number : req.body.number + "@s.whatsapp.net"; await sock.sendMessage(jid, { text: req.body.message }); res.json({ status: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
+          
+          app.get('/qr', async(q,r)=>{ if(sock?.ws?.isOpen)return r.send('<h1>✅ Connected! <a href="/reset">Logout/Reset</a></h1>'); if(!qrData)return r.send('<h1>Loading...</h1>'); r.send(`<div style="text-align:center"><h1>Scan This</h1><img src="${await QRCode.toDataURL(qrData)}" /><br/><br/><a href="/reset" style="color:red">Reset Session</a></div>`); });
+          
+          // --- RESET ROUTE ---
+          app.get('/reset', async (req, res) => {
+             res.send("<h1>Resetting... Please wait 10 seconds and refresh /qr</h1>");
+             if(global.resetBot) global.resetBot();
           });
 
-          app.get('/qr', async(q,r)=>{ if(sock?.ws?.isOpen)return r.send('<h1>Connected</h1>'); if(!qrData)return r.send('<h1>Loading...</h1>'); r.send(`<img src="${await QRCode.toDataURL(qrData)}" />`); });
-          
-          app.listen(PORT, ()=> { console.log("Server on " + PORT); startBot(); });
+          app.listen(PORT, ()=> { console.log("Bot Live"); startBot(); });
           EOF
 
-      # 5. START SERVICES (With AUTO-RESTART Loop)
+      # 5. START SERVICES (Fixed Routing)
       - name: 🚀 Start Everything
         run: |
           docker network create bot-net
 
+          # FIXED CADDYFILE: Added /send and /reset routes
           cat << 'EOF' > Caddyfile
           :80 {
             reverse_proxy /qr wa-bot:10000
+            reverse_proxy /reset wa-bot:10000
+            reverse_proxy /send wa-bot:10000
             reverse_proxy /* n8n:5678
           }
           EOF
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile caddy
 
-          # n8n (Local SQLite Mode)
           docker run -d --name n8n --network bot-net \
             -v $(pwd)/n8n_data:/home/node/.n8n \
             -e N8N_ENCRYPTION_KEY="kuchbhi123" \
@@ -140,23 +128,16 @@ jobs:
             -e WEBHOOK_URL="https://${{ secrets.NGROK_DOMAIN }}" \
             n8nio/n8n
 
-          # WA-BOT (The Immortal Loop)
-          # If node crashes, it restarts in 5 seconds. NEVER DIES.
           docker run -d --name wa-bot --network bot-net \
             -v $(pwd)/whatsapp:/app -w /app \
             -e MONGODB_URI="${{ secrets.MONGODB_URI }}" \
-            node:20-alpine sh -c "apk add --no-cache git && npm install && while true; do node index.js; echo 'Crashed... Restarting'; sleep 5; done"
+            node:20-alpine sh -c "apk add --no-cache git && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
-      # 6. AUTO-SAVE LOOP
+      # 6. SYNC LOOP
       - name: 💾 Sync Loop
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: |
-          echo "✅ System Live at: https://${{ secrets.NGROK_DOMAIN }}"
-          
-          for i in {1..20}; do
-             sleep 900
-             node sync.js up
-          done
+          for i in {1..20}; do sleep 900; node sync.js up; done
           sleep 600

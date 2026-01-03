@@ -1,4 +1,4 @@
-name: Production v27 (New Identity v3)
+name: Production v28 (Nuclear Reset)
 
 on:
   workflow_dispatch:
@@ -34,22 +34,14 @@ jobs:
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
           const path = 'n8n_data/database.sqlite';
-          // Hardcoded Project URL
           const supabaseUrl = 'https://ymatdzammnejrmmiyygg.supabase.co';
           const supabase = createClient(supabaseUrl, process.env.SUPABASE_KEY);
-          
           async function run(mode) {
-            console.log(`🚀 Starting Sync: ${mode}`);
             if(mode==='down') {
               const { data, error } = await supabase.storage.from('bot-storage').download('database.sqlite');
-              if(error) console.log("⚠️ No backup found (New Session)");
-              else fs.writeFileSync(path, Buffer.from(await data.arrayBuffer()));
+              if(!error) fs.writeFileSync(path, Buffer.from(await data.arrayBuffer()));
             } else {
-              if(fs.existsSync(path)) {
-                 const { error } = await supabase.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(path), { upsert: true });
-                 if(error) console.log("❌ Upload Error: " + error.message);
-                 else console.log("✅ Backup Saved");
-              }
+              if(fs.existsSync(path)) await supabase.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(path), { upsert: true });
             }
           }
           run(process.argv[2]);
@@ -62,7 +54,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: node sync.js down
 
-      # 4. CREATE BOT (With NEW Session Key v3)
+      # 4. CREATE BOT (With DELETE ALL Logic)
       - name: 📝 Create Bot
         run: |
           mkdir whatsapp
@@ -76,9 +68,7 @@ jobs:
           const PORT = 10000; 
           const N8N_URL = "http://n8n:5678/webhook/whatsapp"; 
           const MONGO_URL = process.env.MONGODB_URI;
-          
-          // 🔥 NEW SESSION ID v3 (Fresh Start)
-          const SESSION_KEY = 'creds_fresh_v3'; 
+          const SESSION_KEY = 'creds_fresh_v4'; 
 
           const connectDB = async () => { try { await mongoose.connect(MONGO_URL); console.log("✅ Mongo Connected"); } catch (e) { setTimeout(connectDB, 5000); } }; connectDB();
           const authSchema=new mongoose.Schema({_id:String,data:Object});const AuthModel=mongoose.model('Auth',authSchema);
@@ -96,12 +86,14 @@ jobs:
              if(mongoose.connection.readyState === 0) { setTimeout(startBot, 3000); return; }
              const { state, saveCreds, clear } = await useMongoDB();
              
+             // --- NUCLEAR RESET ---
              global.resetBot = async () => {
-                 console.log("⚠️ RESET REQUESTED...");
+                 console.log("⚠️ DELETING ALL DATA...");
                  if(sock) sock.end(undefined);
-                 // Delete ONLY current session
-                 await AuthModel.findByIdAndDelete(SESSION_KEY);
-                 process.exit(0); // Restart Container
+                 // Delete EVERYTHING. Not just one key.
+                 await AuthModel.deleteMany({}); 
+                 console.log("✅ DB WIPED");
+                 process.exit(0); 
              };
 
              sock = makeWASocket({ auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) }, printQRInTerminal: false, logger: pino({ level: 'silent' }), browser: ["Shiksha Bot", "Chrome", "20.0.0"] });
@@ -112,9 +104,16 @@ jobs:
 
           app.post('/send', async (req, res) => { try { if(!sock) return res.status(503).json({error:"Bot loading"}); const jid = req.body.number.includes('@') ? req.body.number : req.body.number + "@s.whatsapp.net"; await sock.sendMessage(jid, { text: req.body.message }); res.json({ status: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
           
-          app.get('/qr', async(q,r)=>{ if(sock?.ws?.isOpen)return r.send(`<h1>✅ Connected (v3)!</h1><p>Active: ${SESSION_KEY}</p><a href="/reset" style="color:red">FORCE LOGOUT</a>`); if(!qrData)return r.send('<h1>⏳ Generating New QR...</h1>'); r.send(`<div style="text-align:center"><h1>Scan This (v27)</h1><img src="${await QRCode.toDataURL(qrData)}" /><br/>Session: ${SESSION_KEY}</div>`); });
+          app.get('/qr', async(q,r)=>{ 
+            if(sock?.ws?.isOpen) return r.send(`<h1>✅ Connected (v4)!</h1><a href="/reset" style="font-size:30px; color:red; font-weight:bold;">CLICK TO WIPE DATABASE</a>`); 
+            if(!qrData) return r.send('<h1>⏳ Generating New QR...</h1>'); 
+            r.send(`<div style="text-align:center"><h1>Scan This (v28)</h1><img src="${await QRCode.toDataURL(qrData)}" /><br/>Session: ${SESSION_KEY}</div>`); 
+          });
           
-          app.get('/reset', async (req, res) => { res.send("<h1>Resetting Session v3... Wait 10s</h1>"); if(global.resetBot) global.resetBot(); });
+          app.get('/reset', async (req, res) => { 
+             res.send("<h1>☢️ WIPING DATABASE... Wait 10s then Refresh /qr</h1>"); 
+             if(global.resetBot) global.resetBot(); 
+          });
 
           app.listen(PORT, ()=> { console.log("Bot Live"); startBot(); });
           EOF

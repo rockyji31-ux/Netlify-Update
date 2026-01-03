@@ -1,4 +1,4 @@
-name: Production v25 (Atomic Reset)
+name: Production v26 (Sync Fixed)
 
 on:
   workflow_dispatch:
@@ -24,22 +24,34 @@ jobs:
           ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > ngrok.log &
           sleep 5
 
-      # 2. SETUP SYNC ENGINE
+      # 2. SETUP SYNC ENGINE (FIXED URL)
       - name: 🔮 Setup Engine
         run: |
           npm install @supabase/supabase-js
           mkdir -p n8n_data && chmod 777 n8n_data
+          
+          # FIXED: Hardcoded Project URL for Storage API
           cat << 'EOF' > sync.js
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
           const path = 'n8n_data/database.sqlite';
-          const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+          
+          // Using your Project URL directly to avoid Secret conflict
+          const supabaseUrl = 'https://ymatdzammnejrmmiyygg.supabase.co';
+          const supabase = createClient(supabaseUrl, process.env.SUPABASE_KEY);
+          
           async function run(mode) {
+            console.log(`🚀 Starting Sync: ${mode}`);
             if(mode==='down') {
               const { data, error } = await supabase.storage.from('bot-storage').download('database.sqlite');
-              if(!error) fs.writeFileSync(path, Buffer.from(await data.arrayBuffer()));
+              if(error) console.log("⚠️ No backup found (New Session)");
+              else fs.writeFileSync(path, Buffer.from(await data.arrayBuffer()));
             } else {
-              if(fs.existsSync(path)) await supabase.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(path), { upsert: true });
+              if(fs.existsSync(path)) {
+                 const { error } = await supabase.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(path), { upsert: true });
+                 if(error) console.log("❌ Upload Error: " + error.message);
+                 else console.log("✅ Backup Saved");
+              }
             }
           }
           run(process.argv[2]);
@@ -49,11 +61,10 @@ jobs:
       - name: 📥 Restore DB
         continue-on-error: true
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: node sync.js down
 
-      # 4. CREATE BOT (With NEW Session Key)
+      # 4. CREATE BOT (With NEW Session Key v2)
       - name: 📝 Create Bot
         run: |
           mkdir whatsapp
@@ -67,8 +78,8 @@ jobs:
           const PORT = 10000; 
           const N8N_URL = "http://n8n:5678/webhook/whatsapp"; 
           const MONGO_URL = process.env.MONGODB_URI;
-          // 🔥 NEW SESSION NAME (Forces Fresh QR)
-          const SESSION_KEY = 'creds_fresh_v1'; 
+          // 🔥 NEW SESSION NAME v2
+          const SESSION_KEY = 'creds_fresh_v2'; 
 
           const connectDB = async () => { try { await mongoose.connect(MONGO_URL); console.log("✅ Mongo Connected"); } catch (e) { setTimeout(connectDB, 5000); } }; connectDB();
           const authSchema=new mongoose.Schema({_id:String,data:Object});const AuthModel=mongoose.model('Auth',authSchema);
@@ -77,7 +88,6 @@ jobs:
              const writeData=async(d,i)=>{try{await AuthModel.findOneAndUpdate({_id:i},{data:d,_id:i},{upsert:!0})}catch(e){}};
              const readData=async(i)=>{try{const d=await AuthModel.findById(i);return d?d.data:null}catch(e){return null}};
              const removeData=async(i)=>{try{await AuthModel.findByIdAndDelete(i)}catch(e){}};
-             // Using the NEW SESSION KEY here
              const creds=(await readData(SESSION_KEY))||(await(require('@whiskeysockets/baileys').initAuthCreds)());
              return{state:{creds,keys:{get:async(t,i)=>{const d={};await Promise.all(i.map(async id=>{let v=await readData(`${t}-${id}`);if(t==='app-state-sync-key'&&v)v=require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(v);if(v)d[id]=v}));return d},set:async d=>{const t=[];for(const c in d)for(const i in d[c]){const v=d[c][i],k=`${c}-${i}`;t.push(v?writeData(v,k):removeData(k))}await Promise.all(t)}}},saveCreds:()=>writeData(creds,SESSION_KEY),clear:async()=>{await AuthModel.deleteMany({})}};
           }
@@ -102,7 +112,7 @@ jobs:
 
           app.post('/send', async (req, res) => { try { if(!sock) return res.status(503).json({error:"Bot loading"}); const jid = req.body.number.includes('@') ? req.body.number : req.body.number + "@s.whatsapp.net"; await sock.sendMessage(jid, { text: req.body.message }); res.json({ status: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
           
-          app.get('/qr', async(q,r)=>{ if(sock?.ws?.isOpen)return r.send(`<h1>✅ Connected!</h1><p>Active Session: ${SESSION_KEY}</p><a href="/reset" style="color:red">FORCE LOGOUT</a>`); if(!qrData)return r.send('<h1>⏳ Generating New QR...</h1>'); r.send(`<div style="text-align:center"><h1>Scan This (v25)</h1><img src="${await QRCode.toDataURL(qrData)}" /><br/>New Session ID: ${SESSION_KEY}</div>`); });
+          app.get('/qr', async(q,r)=>{ if(sock?.ws?.isOpen)return r.send(`<h1>✅ Connected!</h1><p>Active Session: ${SESSION_KEY}</p><a href="/reset" style="color:red">FORCE LOGOUT</a>`); if(!qrData)return r.send('<h1>⏳ Generating New QR...</h1>'); r.send(`<div style="text-align:center"><h1>Scan This (v26)</h1><img src="${await QRCode.toDataURL(qrData)}" /><br/>New Session ID: ${SESSION_KEY}</div>`); });
           
           app.get('/reset', async (req, res) => { res.send("<h1>Nuking Database... Wait 10s</h1>"); if(global.resetBot) global.resetBot(); });
 
@@ -139,7 +149,6 @@ jobs:
       # 6. SYNC LOOP
       - name: 💾 Sync Loop
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: |
           for i in {1..20}; do sleep 900; node sync.js up; done

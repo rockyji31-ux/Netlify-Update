@@ -1,4 +1,4 @@
-name: Production v29 (Render Logic Fixed)
+name: Production v30 (QR Logic Fix)
 
 on:
   workflow_dispatch:
@@ -29,8 +29,6 @@ jobs:
         run: |
           npm install @supabase/supabase-js
           mkdir -p n8n_data && chmod 777 n8n_data
-          
-          # FIXED URL for Sync
           cat << 'EOF' > sync.js
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
@@ -55,14 +53,12 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: node sync.js down
 
-      # 4. CREATE BOT (Using YOUR Render Logic)
+      # 4. CREATE BOT (FIXED LOGIC)
       - name: 📝 Create Bot
         run: |
           mkdir whatsapp
-          # Using your package.json dependencies
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
 
-          # YOUR INDEX.JS LOGIC (Integrated)
           cat << 'EOF' > whatsapp/index.js
           const { default: makeWASocket, DisconnectReason, BufferJSON, useMultiFileAuthState, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
           const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino'); const NodeCache = require('node-cache');
@@ -70,14 +66,11 @@ jobs:
           const app = express(); app.use(express.json());
           
           const PORT = 10000;
-          const N8N_URL = process.env.N8N_WEBHOOK_URL; 
+          const N8N_URL = "http://n8n:5678/webhook/whatsapp"; 
           const MONGO_URL = process.env.MONGODB_URI;
-          
-          // 🔥 NEW COLLECTION NAME -> Forces New Session
           const COLLECTION_NAME = 'Auth_Final_v1'; 
 
           const authSchema = new mongoose.Schema({ _id: String, data: Object });
-          // Mongoose will create a collection named 'auth_final_v1s'
           const AuthModel = mongoose.model(COLLECTION_NAME, authSchema);
 
           async function useMongoDB() {
@@ -85,7 +78,7 @@ jobs:
                   try {
                       const json = JSON.parse(JSON.stringify(data, BufferJSON.replacer));
                       await AuthModel.findOneAndUpdate({ _id: id }, { data: json, _id: id }, { upsert: true });
-                  } catch (err) { console.error("DB Write Failed:", err.message); }
+                  } catch (err) {}
               };
               const readData = async (id) => {
                   try {
@@ -94,9 +87,7 @@ jobs:
                   } catch (err) { return null; }
               };
               const removeData = async (id) => { try { await AuthModel.findByIdAndDelete(id); } catch (err) {} };
-
               const creds = (await readData('creds')) || (await (require('@whiskeysockets/baileys').initAuthCreds)());
-
               return {
                   state: {
                       creds,
@@ -112,36 +103,21 @@ jobs:
                           },
                           set: async (data) => {
                               const tasks = [];
-                              for (const cat in data) {
-                                  for (const id in data[cat]) {
-                                      const val = data[cat][id];
-                                      const key = `${cat}-${id}`;
-                                      tasks.push(val ? writeData(val, key) : removeData(key));
-                                  }
-                              }
+                              for (const cat in data) for (const id in data[cat]) { const val = data[cat][id]; const key = `${cat}-${id}`; tasks.push(val ? writeData(val, key) : removeData(key)); }
                               await Promise.all(tasks);
                           }
                       }
                   },
                   saveCreds: () => writeData(creds, 'creds'),
-                  clear: async () => {
-                      console.log("🧹 Wiping Database...");
-                      await AuthModel.deleteMany({});
-                  }
+                  clear: async () => { await AuthModel.deleteMany({}); }
               };
           }
 
           let sock; let qrData = null;
-          const msgRetryCounterCache = new NodeCache();
-
           async function start() {
               try {
                   if(mongoose.connection.readyState === 0) await mongoose.connect(MONGO_URL);
                   const { state, saveCreds, clear } = await useMongoDB();
-
-                  console.log("🚀 Starting Bot...");
-                  
-                  // Global Reset for API
                   global.clear = clear;
 
                   sock = makeWASocket({
@@ -150,22 +126,19 @@ jobs:
                       printQRInTerminal: false,
                       browser: ["Shiksha Bot", "Chrome", "1.0.0"],
                       connectTimeoutMs: 60000,
-                      msgRetryCounterCache,
                   });
 
                   sock.ev.on('creds.update', saveCreds);
                   sock.ev.on('connection.update', async (update) => {
                       const { connection, lastDisconnect, qr } = update;
-                      if(qr) { qrData = qr; console.log("👉 QR Ready"); }
-                      if(connection === 'open') { qrData = null; console.log("✅ Connected!"); await saveCreds(); }
+                      if(qr) { qrData = qr; console.log("QR Generated"); }
+                      if(connection === 'open') { qrData = null; console.log("Connected"); }
                       if(connection === 'close') {
                           const code = lastDisconnect.error?.output?.statusCode;
-                          console.log(`❌ Closed. Code: ${code}`);
                           if(code === DisconnectReason.loggedOut) { await clear(); process.exit(1); } 
                           else { setTimeout(start, 3000); }
                       }
                   });
-
                   sock.ev.on('messages.upsert', async ({ messages }) => {
                       const msg = messages[0]; if(!msg.message || msg.key.fromMe) return;
                       try {
@@ -174,38 +147,35 @@ jobs:
                       } catch (e) {}
                   });
 
-              } catch (e) { console.error("Startup Error:", e); setTimeout(start, 5000); }
+              } catch (e) { setTimeout(start, 5000); }
           }
 
-          // --- YOUR EXACT API LOGIC ---
           app.post('/send', async (req, res) => {
               try {
                   if (!sock) return res.status(503).json({ error: "Bot starting..." });
                   const { number, message } = req.body;
                   const fullId = number.includes('@') ? number : `${number}@s.whatsapp.net`;
-                  
-                  if (!sock.ws.isOpen) await new Promise(r => setTimeout(r, 2000));
-                  
-                  if (sock.ws.isOpen) {
-                      await sock.sendMessage(fullId, { text: message });
-                      res.json({ status: true });
-                  } else {
-                      res.status(503).json({ error: "Bot disconnected" });
-                  }
+                  await sock.sendMessage(fullId, { text: message });
+                  res.json({ status: true });
               } catch (e) { res.status(500).json({ error: e.message }); }
           });
 
+          // 🔥 FIXED QR LOGIC 🔥
           app.get('/qr', async (req, res) => {
-              if(sock?.ws?.isOpen) return res.send('<h1>✅ Connected!</h1><a href="/reset" style="color:red; font-size:20px;">Force Reset</a>');
-              if(!qrData) return res.send('<h1>Bot Starting... Refresh in 5s</h1>');
+              // Only say "Connected" if User is actually logged in
+              if(sock?.user && !qrData) return res.send('<h1>✅ Connected!</h1><a href="/reset">Reset</a>');
+              
+              // If not logged in, show QR (even if socket is open)
+              if(!qrData) return res.send('<h1>⏳ Generating QR... Refresh in 5s</h1>');
+              
               const url = await QRCode.toDataURL(qrData);
-              res.send(`<div style="text-align:center"><img src="${url}" /><br/><h3>Scan to Login</h3><a href="/reset">Reset Database</a></div>`);
+              res.send(`<div style="text-align:center"><h1>Scan This (v30)</h1><img src="${url}" /><br/><a href="/reset">Reset Database</a></div>`);
           });
 
           app.get('/reset', async (req, res) => {
               if(global.clear) await global.clear();
-              res.send("<h1>Database Wiped. Container Restarting...</h1>");
-              process.exit(1); // This restarts the container loop
+              res.send("<h1>Database Wiped. Restarting...</h1>");
+              process.exit(1);
           });
 
           app.listen(PORT, () => { console.log(`Server on ${PORT}`); start(); });
@@ -233,11 +203,9 @@ jobs:
             -e WEBHOOK_URL="https://${{ secrets.NGROK_DOMAIN }}" \
             n8nio/n8n
 
-          # Corrected Env Vars for your Code
           docker run -d --name wa-bot --network bot-net \
             -v $(pwd)/whatsapp:/app -w /app \
             -e MONGODB_URI="${{ secrets.MONGODB_URI }}" \
-            -e N8N_WEBHOOK_URL="http://n8n:5678/webhook/whatsapp" \
             node:20-alpine sh -c "apk add --no-cache git && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
       # 6. SYNC LOOP

@@ -1,71 +1,137 @@
-name: Production v31 (Full Data Fix)
+name: Production v33 (AI + Fixed Persistence)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *'
+    - cron: '0 */6 * * *' # हर 6 घंटे में रीस्टार्ट (GitHub की लिमिट)
 
 jobs:
-  run-stack:
+  run-super-stack:
     runs-on: ubuntu-latest
-    timeout-minutes: 355
+    timeout-minutes: 355 # ~6 घंटे चलने के लिए
     
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # 1. START NGROK
-      - name: 🚇 Start Ngrok
+      # ----------------------------------------------------------------
+      # 1. SETUP NGROK (Public Access)
+      # ----------------------------------------------------------------
+      - name: 🚇 Start Ngrok Tunnel
         run: |
           curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
           echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
           sudo apt update && sudo apt install ngrok
           ngrok config add-authtoken ${{ secrets.NGROK_TOKEN }}
+          # HTTP और TCP दोनों की जरूरत नहीं, सिर्फ HTTP काफी है
           ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > ngrok.log &
           sleep 5
 
-      # 2. SETUP SYNC ENGINE
-      - name: 🔮 Setup Engine
+      # ----------------------------------------------------------------
+      # 2. PREPARE DATABASE (The "Fetch Once" Fix)
+      # ----------------------------------------------------------------
+      - name: 🔮 Setup Persistence Engine
         run: |
           npm install @supabase/supabase-js
-          mkdir -p n8n_data && chmod 777 n8n_data
+          mkdir -p n8n_data
+          
+          # Sync Script: डाउनलोड और अपलोड दोनों संभालेगा
           cat << 'EOF' > sync.js
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
           const path = 'n8n_data/database.sqlite';
+          // सीधे URL डाल दिया ताकि कोई कन्फ्यूजन न हो
           const supabaseUrl = 'https://ymatdzammnejrmmiyygg.supabase.co';
           const supabase = createClient(supabaseUrl, process.env.SUPABASE_KEY);
+          
           async function run(mode) {
+            console.log(`🚀 Sync Operation: ${mode}`);
             if(mode==='down') {
+              // Supabase से डाउनलोड करो
               const { data, error } = await supabase.storage.from('bot-storage').download('database.sqlite');
-              if(!error) fs.writeFileSync(path, Buffer.from(await data.arrayBuffer()));
+              if(error) {
+                console.log("⚠️ No Backup Found on Supabase (Starting Fresh)");
+              } else {
+                fs.writeFileSync(path, Buffer.from(await data.arrayBuffer()));
+                console.log("✅ Old Database Restored Successfully!");
+              }
             } else {
-              if(fs.existsSync(path)) await supabase.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(path), { upsert: true });
+              // Supabase पर अपलोड करो
+              if(fs.existsSync(path)) {
+                 const { error } = await supabase.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(path), { upsert: true });
+                 if(error) console.log("❌ Upload Failed: " + error.message);
+                 else console.log("✅ Database Backed Up to Cloud!");
+              }
             }
           }
           run(process.argv[2]);
           EOF
 
-      # 3. RESTORE DB
-      - name: 📥 Restore DB
-        continue-on-error: true
+      # 3. EXECUTE RESTORE & FIX PERMISSIONS (Critical Step)
+      - name: 📥 Restore & Fix Permissions
         env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-        run: node sync.js down
+        run: |
+          node sync.js down
+          # यह सबसे जरूरी लाइन है: Docker को फाइल पढ़ने की इजाजत देना
+          chmod -R 777 n8n_data
+          ls -l n8n_data
 
-      # 4. CREATE BOT (With FULL DATA LOGIC)
-      - name: 📝 Create Bot
+      # ----------------------------------------------------------------
+      # [cite_start]4. CREATE AI BRAIN (Python Server) [cite: 2, 3]
+      # ----------------------------------------------------------------
+      - name: 🧠 Inject AI Code
+        run: |
+          mkdir ai
+          # Flask Server जो g4f (Free AI) use करेगा
+          cat << 'EOF' > ai/ai_server.py
+          import logging, g4f
+          from flask import Flask, request, jsonify
+          
+          # लॉग्स साफ़ रखने के लिए
+          log = logging.getLogger('werkzeug')
+          log.setLevel(logging.ERROR)
+          
+          app = Flask(__name__)
+          
+          @app.route('/chat', methods=['POST'])
+          def chat():
+              try:
+                  data = request.json
+                  user_msg = data.get('message')
+                  print(f"[User]: {user_msg}")
+                  
+                  # Free GPT-4 Provider
+                  response = g4f.ChatCompletion.create(
+                      model=g4f.models.gpt_4,
+                      messages=[{"role": "user", "content": user_msg}]
+                  )
+                  print(f"[AI]: {response[:20]}...") 
+                  return jsonify({"response": response})
+              except Exception as e:
+                  print(f"[Error]: {e}")
+                  return jsonify({"error": str(e)}), 500
+          
+          if __name__ == '__main__':
+              app.run(host='0.0.0.0', port=5000)
+          EOF
+
+      # ----------------------------------------------------------------
+      # [cite_start]5. CREATE WHATSAPP BOT (With Full JSON Fix) [cite: 20, 21]
+      # ----------------------------------------------------------------
+      - name: 📝 Create Bot Files
         run: |
           mkdir whatsapp
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
 
+          # index.js with FULL DATA logic
           cat << 'EOF' > whatsapp/index.js
           const { default: makeWASocket, DisconnectReason, BufferJSON, useMultiFileAuthState, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
           const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino'); const NodeCache = require('node-cache');
           
           const app = express(); app.use(express.json());
-          
-          const PORT = 10000;
+          const PORT = 10000; 
+          // n8n Webhook URL (Internal Docker Network)
           const N8N_URL = "http://n8n:5678/webhook/whatsapp"; 
           const MONGO_URL = process.env.MONGODB_URI;
           const COLLECTION_NAME = 'Auth_Final_v1'; 
@@ -74,130 +140,103 @@ jobs:
           const AuthModel = mongoose.model(COLLECTION_NAME, authSchema);
 
           async function useMongoDB() {
-              const writeData = async (data, id) => {
-                  try {
-                      const json = JSON.parse(JSON.stringify(data, BufferJSON.replacer));
-                      await AuthModel.findOneAndUpdate({ _id: id }, { data: json, _id: id }, { upsert: true });
-                  } catch (err) {}
-              };
-              const readData = async (id) => {
-                  try {
-                      const doc = await AuthModel.findById(id);
-                      return doc ? JSON.parse(JSON.stringify(doc.data), BufferJSON.reviver) : null;
-                  } catch (err) { return null; }
-              };
+              const writeData = async (data, id) => { try { await AuthModel.findOneAndUpdate({ _id: id }, { data: JSON.parse(JSON.stringify(data, BufferJSON.replacer)), _id: id }, { upsert: true }); } catch (err) {} };
+              const readData = async (id) => { try { const doc = await AuthModel.findById(id); return doc ? JSON.parse(JSON.stringify(doc.data), BufferJSON.reviver) : null; } catch (err) { return null; } };
               const removeData = async (id) => { try { await AuthModel.findByIdAndDelete(id); } catch (err) {} };
               const creds = (await readData('creds')) || (await (require('@whiskeysockets/baileys').initAuthCreds)());
-              return {
-                  state: {
-                      creds,
-                      keys: {
-                          get: async (type, ids) => {
-                              const data = {};
-                              await Promise.all(ids.map(async (id) => {
-                                  let val = await readData(`${type}-${id}`);
-                                  if (type === 'app-state-sync-key' && val) val = require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(val);
-                                  if (val) data[id] = val;
-                              }));
-                              return data;
-                          },
-                          set: async (data) => {
-                              const tasks = [];
-                              for (const cat in data) for (const id in data[cat]) { const val = data[cat][id]; const key = `${cat}-${id}`; tasks.push(val ? writeData(val, key) : removeData(key)); }
-                              await Promise.all(tasks);
-                          }
-                      }
-                  },
-                  saveCreds: () => writeData(creds, 'creds'),
-                  clear: async () => { await AuthModel.deleteMany({}); }
-              };
+              return { state: { creds, keys: { get: async (t, i) => { const d = {}; await Promise.all(i.map(async id => { let v = await readData(`${t}-${id}`); if (t === 'app-state-sync-key' && v) v = require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(v); if (v) d[id] = v; })); return d; }, set: async (d) => { const t = []; for (const c in d) for (const i in d[c]) { const v = d[c][i], k = `${c}-${i}`; t.push(v ? writeData(v, k) : removeData(k)); } await Promise.all(t); } } }, saveCreds: () => writeData(creds, 'creds'), clear: async () => { await AuthModel.deleteMany({}); } };
           }
 
           let sock; let qrData = null;
           async function start() {
               try {
                   if(mongoose.connection.readyState === 0) await mongoose.connect(MONGO_URL);
-                  const { state, saveCreds, clear } = await useMongoDB();
-                  global.clear = clear;
+                  const { state, saveCreds, clear } = await useMongoDB(); global.clear = clear;
 
-                  sock = makeWASocket({
-                      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) },
-                      logger: pino({ level: 'silent' }),
-                      printQRInTerminal: false,
-                      browser: ["Shiksha Bot", "Chrome", "1.0.0"],
-                      connectTimeoutMs: 60000,
+                  sock = makeWASocket({ 
+                      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) }, 
+                      logger: pino({ level: 'silent' }), 
+                      printQRInTerminal: false, 
+                      browser: ["Shiksha AI", "Chrome", "1.0.0"], 
+                      connectTimeoutMs: 60000 
                   });
 
                   sock.ev.on('creds.update', saveCreds);
-                  sock.ev.on('connection.update', async (update) => {
-                      const { connection, lastDisconnect, qr } = update;
-                      if(qr) { qrData = qr; console.log("QR Generated"); }
-                      if(connection === 'open') { qrData = null; console.log("Connected"); }
-                      if(connection === 'close') {
-                          const code = lastDisconnect.error?.output?.statusCode;
+                  sock.ev.on('connection.update', async (update) => { 
+                      const { connection, lastDisconnect, qr } = update; 
+                      if(qr) qrData = qr; 
+                      if(connection === 'open') { qrData = null; console.log("✅ Bot Connected!"); } 
+                      if(connection === 'close') { 
+                          const code = lastDisconnect.error?.output?.statusCode; 
                           if(code === DisconnectReason.loggedOut) { await clear(); process.exit(1); } 
-                          else { setTimeout(start, 3000); }
-                      }
+                          else { setTimeout(start, 3000); } 
+                      } 
                   });
-                  
-                  // 🔥 FIXED: Sending Full JSON Data 🔥
-                  sock.ev.on('messages.upsert', async ({ messages }) => {
-                      const msg = messages[0]; if(!msg.message || msg.key.fromMe) return;
-                      try {
-                          const realNumber = (msg.key.participant || msg.key.remoteJid).split('@')[0];
+
+                  // 🔥 FULL DATA SENDING LOGIC 🔥
+                  sock.ev.on('messages.upsert', async ({ messages }) => { 
+                      const msg = messages[0]; 
+                      if(!msg.message || msg.key.fromMe) return; 
+                      try { 
+                          const realNumber = (msg.key.participant || msg.key.remoteJid).split('@')[0]; 
                           await axios.post(N8N_URL, { 
                               from: realNumber, 
                               text: msg.message.conversation || msg.message.extendedTextMessage?.text, 
-                              name: msg.pushName,
-                              full_json: msg // <--- Added This Line
-                          });
-                      } catch (e) {}
+                              name: msg.pushName, 
+                              full_json: msg // <--- यह पूरा डेटा n8n को भेजेगा
+                          }); 
+                      } catch (e) {} 
                   });
 
               } catch (e) { setTimeout(start, 5000); }
           }
 
-          app.post('/send', async (req, res) => {
-              try {
-                  if (!sock) return res.status(503).json({ error: "Bot starting..." });
-                  const { number, message } = req.body;
-                  const fullId = number.includes('@') ? number : `${number}@s.whatsapp.net`;
-                  await sock.sendMessage(fullId, { text: message });
-                  res.json({ status: true });
-              } catch (e) { res.status(500).json({ error: e.message }); }
+          app.post('/send', async (req, res) => { try { if (!sock) return res.status(503).json({ error: "Starting" }); const { number, message } = req.body; const fullId = number.includes('@') ? number : `${number}@s.whatsapp.net`; await sock.sendMessage(fullId, { text: message }); res.json({ status: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
+          
+          app.get('/qr', async (req, res) => { 
+             if(sock?.user && !qrData) return res.send('<h1>✅ Connected!</h1><a href="/reset">Reset</a>'); 
+             if(!qrData) return res.send('<h1>⏳ Generating QR...</h1>'); 
+             const url = await QRCode.toDataURL(qrData); 
+             res.send(`<div style="text-align:center"><h1>Scan for AI Bot</h1><img src="${url}" /><br/><a href="/reset">Reset</a></div>`); 
           });
-
-          app.get('/qr', async (req, res) => {
-              if(sock?.user && !qrData) return res.send('<h1>✅ Connected!</h1><a href="/reset">Reset</a>');
-              if(!qrData) return res.send('<h1>⏳ Generating QR... Refresh in 5s</h1>');
-              const url = await QRCode.toDataURL(qrData);
-              res.send(`<div style="text-align:center"><h1>Scan This (v31)</h1><img src="${url}" /><br/><a href="/reset">Reset Database</a></div>`);
-          });
-
-          app.get('/reset', async (req, res) => {
-              if(global.clear) await global.clear();
-              res.send("<h1>Database Wiped. Restarting...</h1>");
-              process.exit(1);
-          });
-
-          app.listen(PORT, () => { console.log(`Server on ${PORT}`); start(); });
+          
+          app.get('/reset', async (req, res) => { if(global.clear) await global.clear(); res.send("<h1>Wiped. Restarting...</h1>"); process.exit(1); });
+          
+          app.listen(PORT, () => { console.log(`Bot running on ${PORT}`); start(); });
           EOF
 
-      # 5. START SERVICES
-      - name: 🚀 Start Everything
+      # ----------------------------------------------------------------
+      # 6. START ALL SERVICES (Docker Magic)
+      # ----------------------------------------------------------------
+      - name: 🚀 Launch System
         run: |
+          # सबको एक ही नेटवर्क में डालें ताकि वो आपस में बात कर सकें
           docker network create bot-net
 
+          # Caddy Configuration (Traffic Police)
+          # /chat -> AI के पास
+          # /qr, /send -> WhatsApp Bot के पास
+          # बाकी सब -> n8n के पास
           cat << 'EOF' > Caddyfile
           :80 {
             reverse_proxy /qr wa-bot:10000
             reverse_proxy /reset wa-bot:10000
             reverse_proxy /send wa-bot:10000
+            reverse_proxy /chat ai-server:5000
             reverse_proxy /* n8n:5678
           }
           EOF
+
+          # 1. Start Caddy
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile caddy
 
+          # 2. Start AI Server (Python)
+          docker run -d --name ai-server --network bot-net \
+            -v $(pwd)/ai:/app -w /app \
+            python:3.9-slim sh -c "pip install flask g4f curl_cffi && python ai_server.py"
+
+          # 3. Start n8n (With Persistent Storage)
+          # 'chmod 777' की वजह से यह अब 'n8n_data' को पढ़ पाएगा
           docker run -d --name n8n --network bot-net \
             -v $(pwd)/n8n_data:/home/node/.n8n \
             -e N8N_ENCRYPTION_KEY="kuchbhi123" \
@@ -205,15 +244,28 @@ jobs:
             -e WEBHOOK_URL="https://${{ secrets.NGROK_DOMAIN }}" \
             n8nio/n8n
 
+          # 4. Start WhatsApp Bot
           docker run -d --name wa-bot --network bot-net \
             -v $(pwd)/whatsapp:/app -w /app \
             -e MONGODB_URI="${{ secrets.MONGODB_URI }}" \
             node:20-alpine sh -c "apk add --no-cache git && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
-      # 6. SYNC LOOP
-      - name: 💾 Sync Loop
+      # ----------------------------------------------------------------
+      # 7. KEEP ALIVE & BACKUP LOOP
+      # ----------------------------------------------------------------
+      - name: 💾 Auto-Save Loop
         env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: |
-          for i in {1..20}; do sleep 900; node sync.js up; done
+          echo "✅ System Online at https://${{ secrets.NGROK_DOMAIN }}"
+          echo "🧠 AI Endpoint: https://${{ secrets.NGROK_DOMAIN }}/chat"
+          
+          # 20 cycles * 15 min = 5 hours (GitHub limit ke andar)
+          for i in {1..20}; do 
+             sleep 900
+             echo "🔄 Saving n8n Database..."
+             node sync.js up
+          done
+          
+          echo "🛑 Stopping gracefully..."
           sleep 600

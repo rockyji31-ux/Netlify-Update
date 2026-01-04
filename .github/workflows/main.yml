@@ -1,4 +1,4 @@
-name: Production v36 (The Immortal: AI + Sync + Watchdog)
+name: "Production v37 (The Immortal: AI + Sync + Watchdog)"
 
 on:
   workflow_dispatch:
@@ -155,7 +155,7 @@ jobs:
           <meta http-equiv="refresh" content="30">
           <style>body{font-family:sans-serif;background:#0f0f0f;color:#e0e0e0;text-align:center;padding:40px;} .box{border:1px solid #333;padding:20px;margin:10px;display:inline-block;border-radius:8px;} a{color:#00bcd4;text-decoration:none;}</style>
           </head><body>
-            <h1 style="color:#00ff88;">🚀 System Operational (v36)</h1>
+            <h1 style="color:#00ff88;">🚀 System Operational (v37)</h1>
             <div class="box">🤖 Bot: Online</div>
             <div class="box">🧠 AI Server: Active</div>
             <div class="box">💾 Sync: Smart</div>
@@ -221,7 +221,7 @@ jobs:
       # ==================================================================
       # 7. LAUNCH SYSTEM (Tri-Hybrid Network)
       # ==================================================================
-      - name: 🚀 Launch v36
+      - name: 🚀 Launch v37
         run: |
           docker network create bot-net
 

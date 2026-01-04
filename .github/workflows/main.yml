@@ -1,12 +1,12 @@
-name: "Production v37 (The Immortal: AI + Sync + Watchdog)"
+name: "Production v41 (Final Beast: Real Key + AI + Watchdog)"
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *' # Auto-Restart every 6 hours
+    - cron: '0 */6 * * *' # हर 6 घंटे में रीस्टार्ट (GitHub Limit Bypass)
 
 jobs:
-  run-immortal:
+  run-beast-mode:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     
@@ -15,22 +15,22 @@ jobs:
         uses: actions/checkout@v3
 
       # ==================================================================
-      # 1. OPTIMIZE SERVER (RAM & Network Tuning)
+      # 1. SERVER TUNING (Super Advanced)
       # ==================================================================
-      - name: 🛠️ Geeky Optimization
+      - name: 🛠️ Server Optimization
         run: |
-          # 1. Create 2GB Swap (Prevent RAM Crash)
+          # 2GB Swap Memory (RAM Booster)
           sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
           sudo mkswap /swapfile && sudo swapon /swapfile
           
-          # 2. Enable BBR (Speed Boost)
+          # Google BBR (Internet Speed Booster)
           sudo sysctl -w net.core.default_qdisc=fq
           sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
           
-          echo "✅ Server Tuned: 9GB RAM + BBR Network"
+          echo "✅ Server Optimized: 9GB RAM + BBR Speed"
 
       # ==================================================================
-      # 2. SETUP NGROK (Static Domain)
+      # 2. STATIC DOMAIN (Ngrok)
       # ==================================================================
       - name: 🚇 Start Static Tunnel
         run: |
@@ -42,17 +42,17 @@ jobs:
           # Static Domain Start
           ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > ngrok.log &
           sleep 5
-          echo "✅ Tunnel Live: https://${{ secrets.NGROK_DOMAIN }}"
+          echo "✅ Tunnel Live Check Dashboard"
 
       # ==================================================================
-      # 3. SETUP SMART STORAGE (Smart Sync V2)
+      # 3. SMART STORAGE SYNC (No Crypto Warning)
       # ==================================================================
       - name: 💾 Setup Smart Persistence
         run: |
-          npm install @supabase/supabase-js crypto
+          npm install @supabase/supabase-js
           mkdir -p n8n_data
           
-          # SMART SYNC SCRIPT (md5 Hash Check)
+          # SMART SYNC SCRIPT (Handles Backup & Restore)
           cat << 'EOF' > smart_sync.js
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
@@ -72,26 +72,26 @@ jobs:
           async function run(mode) {
             try {
                 if(mode==='down') {
-                  console.log("📥 Syncing Down...");
+                  console.log("📥 Syncing Down from Cloud...");
                   const { data, error } = await supabase.storage.from('bot-storage').download('database.sqlite');
                   if(!error) {
                      fs.writeFileSync(path, Buffer.from(await data.arrayBuffer()));
                      lastHash = getFileHash(path);
-                     console.log(`✅ Restored (Hash: ${lastHash})`);
+                     console.log(`✅ Restored from AWS Backup (Hash: ${lastHash})`);
                   } else {
-                     console.log("⚠️ Fresh Start");
+                     console.log("⚠️ No Backup Found - Starting Fresh");
                   }
                 } else {
                   if(!fs.existsSync(path)) return;
                   const currentHash = getFileHash(path);
                   if (currentHash === lastHash) {
-                     console.log("💤 No Changes. Skipping.");
+                     console.log("💤 No Changes Detected. Skipping Upload.");
                      return;
                   }
-                  console.log(`📤 Changes Detected! Uploading...`);
+                  console.log(`📤 New Data Detected! Uploading to Cloud...`);
                   const { error } = await supabase.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(path), { upsert: true });
                   if(!error) {
-                     console.log("✅ Uploaded");
+                     console.log("✅ Backup Saved Successfully");
                      lastHash = currentHash;
                   }
                 }
@@ -108,12 +108,12 @@ jobs:
           chmod -R 777 n8n_data
 
       # ==================================================================
-      # 4. CREATE AI SERVER (Python G4F - The Plan B)
+      # 4. AI SERVER (Plan B - Local Fallback)
       # ==================================================================
       - name: 🧠 Create AI Brain
         run: |
           mkdir ai
-          # Flask Server with G4F (Always Free)
+          # Flask Server with G4F
           cat << 'EOF' > ai/ai_server.py
           import logging, g4f
           from flask import Flask, request, jsonify
@@ -129,7 +129,6 @@ jobs:
               try:
                   msg = request.json.get('message')
                   print(f"[User]: {msg}")
-                  # Using Auto Provider for best stability
                   resp = g4f.ChatCompletion.create(
                       model=g4f.models.gpt_4,
                       messages=[{"role": "user", "content": msg}]
@@ -143,7 +142,7 @@ jobs:
           EOF
 
       # ==================================================================
-      # 5. CREATE WHATSAPP BOT & DASHBOARD
+      # 5. CONFIGS (WhatsApp & Dashboard)
       # ==================================================================
       - name: 📝 Create Configs
         run: |
@@ -155,19 +154,20 @@ jobs:
           <meta http-equiv="refresh" content="30">
           <style>body{font-family:sans-serif;background:#0f0f0f;color:#e0e0e0;text-align:center;padding:40px;} .box{border:1px solid #333;padding:20px;margin:10px;display:inline-block;border-radius:8px;} a{color:#00bcd4;text-decoration:none;}</style>
           </head><body>
-            <h1 style="color:#00ff88;">🚀 System Operational (v37)</h1>
+            <h1 style="color:#00ff88;">🚀 System Operational (v41)</h1>
             <div class="box">🤖 Bot: Online</div>
             <div class="box">🧠 AI Server: Active</div>
             <div class="box">💾 Sync: Smart</div>
             <br><br>
+            <p>Domain: ${{ secrets.NGROK_DOMAIN }}</p>
             <a href="/workflow">Open n8n</a> | <a href="/qr">Scan QR</a>
           </body></html>
           EOF
 
-          # WA Bot Code
+          # WA Bot Dependencies
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
           
-          # Bot Index.js (Updated with Full Data Logic)
+          # WA Bot Logic
           cat << 'EOF' > whatsapp/index.js
           const { default: makeWASocket, DisconnectReason, BufferJSON, useMultiFileAuthState, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
           const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino');
@@ -200,18 +200,16 @@ jobs:
           EOF
 
       # ==================================================================
-      # 6. SETUP UNIVERSAL WATCHDOG (Protects 3 Containers)
+      # 6. UNIVERSAL WATCHDOG (System Protector)
       # ==================================================================
       - name: 🛡️ Setup Watchdog
         run: |
           cat << 'EOF' > watchdog.sh
           #!/bin/bash
           while true; do
-            # 1. Check n8n
+            # Check n8n, Bot, and AI Server
             if ! docker ps | grep -q n8n; then echo "🚨 n8n Down! Restarting..."; docker restart n8n; fi
-            # 2. Check WhatsApp Bot
             if ! docker ps | grep -q wa-bot; then echo "🚨 Bot Down! Restarting..."; docker restart wa-bot; fi
-            # 3. Check AI Server
             if ! docker ps | grep -q ai-server; then echo "🚨 AI Down! Restarting..."; docker restart ai-server; fi
             sleep 10
           done
@@ -219,62 +217,52 @@ jobs:
           chmod +x watchdog.sh
 
       # ==================================================================
-      # 7. LAUNCH SYSTEM (Tri-Hybrid Network)
+      # 7. LAUNCH SYSTEM (Docker)
       # ==================================================================
-      - name: 🚀 Launch v37
+      - name: 🚀 Launch v41
         run: |
           docker network create bot-net
 
-          # Caddy Routing (Directs traffic correctly)
+          # Caddy Routing
           cat << 'EOF' > Caddyfile
           :80 {
-            # Route /chat to AI Server (Plan B)
             reverse_proxy /chat ai-server:5000
-            
-            # WhatsApp Routes
             reverse_proxy /qr wa-bot:10000
             reverse_proxy /reset wa-bot:10000
             reverse_proxy /send wa-bot:10000
-            
-            # Dashboard
             handle /dash {
                root * /srv/public
                file_server
                try_files {path} /index.html
             }
-            
-            # Default to n8n
             reverse_proxy /* n8n:5678
           }
           EOF
 
-          # 1. Start Caddy
           docker run -d --name caddy --network bot-net -p 80:80 \
             -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile \
             -v $(pwd)/public:/srv/public \
             caddy:latest
 
-          # 2. Start AI Server (Plan B)
           docker run -d --name ai-server --network bot-net \
             -v $(pwd)/ai:/app -w /app \
             python:3.9-slim sh -c "pip install flask g4f curl_cffi && python ai_server.py"
 
-          # 3. Start n8n
+          # 🛑 IMPORTANT: USING REAL KEY FROM SECRETS 🛑
           docker run -d --name n8n --network bot-net \
             -v $(pwd)/n8n_data:/home/node/.n8n \
-            -e N8N_ENCRYPTION_KEY="kuchbhi123" \
+            -e N8N_ENCRYPTION_KEY="${{ secrets.N8N_ENCRYPTION_KEY }}" \
             -e N8N_SECURE_COOKIE=false \
             -e WEBHOOK_URL="https://${{ secrets.NGROK_DOMAIN }}" \
             n8nio/n8n
 
-          # 4. Start WhatsApp Bot
           docker run -d --name wa-bot --network bot-net \
             -v $(pwd)/whatsapp:/app -w /app \
             -e MONGODB_URI="${{ secrets.MONGODB_URI }}" \
             node:20-alpine sh -c "apk add --no-cache git && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
       # ==================================================================
-      # 8. MONITORING LOOP
+      # 8. MAINTENANCE LOOP (Keep Alive)
       # ==================================================================
       - name: 🔄 System Loop
         env:
@@ -285,11 +273,11 @@ jobs:
           # Start Watchdog
           ./watchdog.sh &
           
-          # Smart Sync Loop
+          # Smart Sync Loop (Runs for ~5.5 Hours)
           for i in {1..22}; do 
              sleep 900
              node smart_sync.js up
           done
           
-          echo "🛑 Stopping..."
+          echo "🛑 Stopping gracefully..."
           sleep 300

@@ -1,4 +1,4 @@
-name: Production v35 (Platinum Edition)
+name: Production v36 (The Immortal: AI + Sync + Watchdog)
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
     - cron: '0 */6 * * *' # Auto-Restart every 6 hours
 
 jobs:
-  run-platinum:
+  run-immortal:
     runs-on: ubuntu-latest
     timeout-minutes: 355
     
@@ -14,26 +14,24 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      # ------------------------------------------------------------------
-      # 1. OPTIMIZE SERVER (RAM & Network)
-      # ------------------------------------------------------------------
-      - name: 🛠️ Optimize Environment
+      # ==================================================================
+      # 1. OPTIMIZE SERVER (RAM & Network Tuning)
+      # ==================================================================
+      - name: 🛠️ Geeky Optimization
         run: |
-          # 2GB Swap File (Prevent Out-Of-Memory Crashes)
-          sudo fallocate -l 2G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          # 1. Create 2GB Swap (Prevent RAM Crash)
+          sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+          sudo mkswap /swapfile && sudo swapon /swapfile
           
-          # Enable BBR (Boost Network Speed)
+          # 2. Enable BBR (Speed Boost)
           sudo sysctl -w net.core.default_qdisc=fq
           sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
           
-          echo "✅ RAM & Network Optimized"
+          echo "✅ Server Tuned: 9GB RAM + BBR Network"
 
-      # ------------------------------------------------------------------
+      # ==================================================================
       # 2. SETUP NGROK (Static Domain)
-      # ------------------------------------------------------------------
+      # ==================================================================
       - name: 🚇 Start Static Tunnel
         run: |
           curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
@@ -46,22 +44,21 @@ jobs:
           sleep 5
           echo "✅ Tunnel Live: https://${{ secrets.NGROK_DOMAIN }}"
 
-      # ------------------------------------------------------------------
-      # 3. SETUP SMART STORAGE (SQLite + Supabase Sync)
-      # ------------------------------------------------------------------
+      # ==================================================================
+      # 3. SETUP SMART STORAGE (Smart Sync V2)
+      # ==================================================================
       - name: 💾 Setup Smart Persistence
         run: |
           npm install @supabase/supabase-js crypto
           mkdir -p n8n_data
           
-          # SMART SYNC SCRIPT (Changes Only)
+          # SMART SYNC SCRIPT (md5 Hash Check)
           cat << 'EOF' > smart_sync.js
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
           const crypto = require('crypto');
           const path = 'n8n_data/database.sqlite';
           
-          // Using HTTP Client (Works on all Networks IPv4/IPv6)
           const supabaseUrl = 'https://ymatdzammnejrmmiyygg.supabase.co';
           const supabase = createClient(supabaseUrl, process.env.SUPABASE_KEY);
           
@@ -75,29 +72,27 @@ jobs:
           async function run(mode) {
             try {
                 if(mode==='down') {
-                  console.log("📥 Downloading Backup...");
+                  console.log("📥 Syncing Down...");
                   const { data, error } = await supabase.storage.from('bot-storage').download('database.sqlite');
                   if(!error) {
                      fs.writeFileSync(path, Buffer.from(await data.arrayBuffer()));
                      lastHash = getFileHash(path);
-                     console.log(`✅ Restored! (Hash: ${lastHash})`);
+                     console.log(`✅ Restored (Hash: ${lastHash})`);
                   } else {
-                     console.log("⚠️ No Backup Found (Starting Fresh)");
+                     console.log("⚠️ Fresh Start");
                   }
                 } else {
                   if(!fs.existsSync(path)) return;
                   const currentHash = getFileHash(path);
                   if (currentHash === lastHash) {
-                     console.log("💤 No Changes. Skipping Upload.");
+                     console.log("💤 No Changes. Skipping.");
                      return;
                   }
                   console.log(`📤 Changes Detected! Uploading...`);
                   const { error } = await supabase.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(path), { upsert: true });
                   if(!error) {
-                     console.log("✅ Upload Complete");
+                     console.log("✅ Uploaded");
                      lastHash = currentHash;
-                  } else {
-                     console.error("❌ Upload Failed:", error.message);
                   }
                 }
             } catch (e) { console.error("Sync Error:", e.message); }
@@ -112,48 +107,74 @@ jobs:
           node smart_sync.js down
           chmod -R 777 n8n_data
 
-      # ------------------------------------------------------------------
-      # 4. CREATE DASHBOARD & CONFIGS
-      # ------------------------------------------------------------------
-      - name: 🖥️ Setup Dashboard & Configs
+      # ==================================================================
+      # 4. CREATE AI SERVER (Python G4F - The Plan B)
+      # ==================================================================
+      - name: 🧠 Create AI Brain
         run: |
-          mkdir -p public whatsapp
+          mkdir ai
+          # Flask Server with G4F (Always Free)
+          cat << 'EOF' > ai/ai_server.py
+          import logging, g4f
+          from flask import Flask, request, jsonify
           
-          # Status Dashboard
+          log = logging.getLogger('werkzeug'); log.setLevel(logging.ERROR)
+          app = Flask(__name__)
+          
+          @app.route('/', methods=['GET'])
+          def health(): return "AI Alive", 200
+
+          @app.route('/chat', methods=['POST'])
+          def chat():
+              try:
+                  msg = request.json.get('message')
+                  print(f"[User]: {msg}")
+                  # Using Auto Provider for best stability
+                  resp = g4f.ChatCompletion.create(
+                      model=g4f.models.gpt_4,
+                      messages=[{"role": "user", "content": msg}]
+                  )
+                  return jsonify({"response": resp})
+              except Exception as e: 
+                  print(f"AI Error: {e}")
+                  return jsonify({"error": str(e)}), 500
+                  
+          if __name__ == '__main__': app.run(host='0.0.0.0', port=5000)
+          EOF
+
+      # ==================================================================
+      # 5. CREATE WHATSAPP BOT & DASHBOARD
+      # ==================================================================
+      - name: 📝 Create Configs
+        run: |
+          mkdir whatsapp public
+          
+          # Dashboard
           cat << 'EOF' > public/index.html
           <!DOCTYPE html><html><head><title>System Status</title>
           <meta http-equiv="refresh" content="30">
-          <style>body{font-family:sans-serif;background:#0f0f0f;color:#e0e0e0;text-align:center;padding:40px;}</style>
+          <style>body{font-family:sans-serif;background:#0f0f0f;color:#e0e0e0;text-align:center;padding:40px;} .box{border:1px solid #333;padding:20px;margin:10px;display:inline-block;border-radius:8px;} a{color:#00bcd4;text-decoration:none;}</style>
           </head><body>
-            <h1 style="color:#00ff88;">🚀 System Operational</h1>
-            <p>Domain: ${{ secrets.NGROK_DOMAIN }}</p>
-            <hr style="border-color:#333;">
-            <a href="/workflow" style="color:#00bcd4;font-size:20px;margin:10px;">Open n8n</a>
-            <a href="/qr" style="color:#ffeb3b;font-size:20px;margin:10px;">Scan QR</a>
+            <h1 style="color:#00ff88;">🚀 System Operational (v36)</h1>
+            <div class="box">🤖 Bot: Online</div>
+            <div class="box">🧠 AI Server: Active</div>
+            <div class="box">💾 Sync: Smart</div>
+            <br><br>
+            <a href="/workflow">Open n8n</a> | <a href="/qr">Scan QR</a>
           </body></html>
           EOF
 
-      # ------------------------------------------------------------------
-      # 5. CREATE WHATSAPP BOT (Robust Version)
-      # ------------------------------------------------------------------
-      - name: 📝 Create WhatsApp Bot
-        run: |
+          # WA Bot Code
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
-
+          
+          # Bot Index.js (Updated with Full Data Logic)
           cat << 'EOF' > whatsapp/index.js
           const { default: makeWASocket, DisconnectReason, BufferJSON, useMultiFileAuthState, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
           const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino');
           const app = express(); app.use(express.json());
-          
-          const PORT = 10000; 
-          const N8N_URL = "http://n8n:5678/webhook/whatsapp"; 
-          const MONGO_URL = process.env.MONGODB_URI;
+          const PORT = 10000; const N8N_URL = "http://n8n:5678/webhook/whatsapp"; const MONGO_URL = process.env.MONGODB_URI;
           const COLLECTION_NAME = 'Auth_Final_v1'; 
-
-          const authSchema = new mongoose.Schema({ _id: String, data: Object });
-          const AuthModel = mongoose.model(COLLECTION_NAME, authSchema);
-
-          // Mongo Auth Adapter
+          const authSchema = new mongoose.Schema({ _id: String, data: Object }); const AuthModel = mongoose.model(COLLECTION_NAME, authSchema);
           async function useMongoDB() {
               const writeData = async (data, id) => { try { await AuthModel.findOneAndUpdate({ _id: id }, { data: JSON.parse(JSON.stringify(data, BufferJSON.replacer)), _id: id }, { upsert: true }); } catch (err) {} };
               const readData = async (id) => { try { const doc = await AuthModel.findById(id); return doc ? JSON.parse(JSON.stringify(doc.data), BufferJSON.reviver) : null; } catch (err) { return null; } };
@@ -161,108 +182,84 @@ jobs:
               const creds = (await readData('creds')) || (await (require('@whiskeysockets/baileys').initAuthCreds)());
               return { state: { creds, keys: { get: async (t, i) => { const d = {}; await Promise.all(i.map(async id => { let v = await readData(`${t}-${id}`); if (t === 'app-state-sync-key' && v) v = require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(v); if (v) d[id] = v; })); return d; }, set: async (d) => { const t = []; for (const c in d) for (const i in d[c]) { const v = d[c][i], k = `${c}-${i}`; t.push(v ? writeData(v, k) : removeData(k)); } await Promise.all(t); } } }, saveCreds: () => writeData(creds, 'creds'), clear: async () => { await AuthModel.deleteMany({}); } };
           }
-
           let sock; let qrData = null;
           async function start() {
               try {
                   if(mongoose.connection.readyState === 0) await mongoose.connect(MONGO_URL);
                   const { state, saveCreds, clear } = await useMongoDB(); global.clear = clear;
-                  
-                  sock = makeWASocket({ 
-                      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) }, 
-                      logger: pino({ level: 'silent' }), 
-                      printQRInTerminal: false, 
-                      browser: ["Shiksha Bot", "Chrome", "1.0.0"], 
-                      connectTimeoutMs: 60000 
-                  });
-
+                  sock = makeWASocket({ auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) }, logger: pino({ level: 'silent' }), printQRInTerminal: false, browser: ["Shiksha AI", "Chrome", "1.0.0"], connectTimeoutMs: 60000 });
                   sock.ev.on('creds.update', saveCreds);
-                  sock.ev.on('connection.update', async (u) => { 
-                      const { connection, lastDisconnect, qr } = u; 
-                      if(qr) qrData = qr; 
-                      if(connection === 'open') { qrData = null; console.log("✅ Bot Connected"); } 
-                      if(connection === 'close') { 
-                          const code = lastDisconnect.error?.output?.statusCode; 
-                          if(code === DisconnectReason.loggedOut) { await clear(); process.exit(1); } 
-                          else { setTimeout(start, 3000); } 
-                      } 
-                  });
-
-                  // Sending FULL JSON to n8n
-                  sock.ev.on('messages.upsert', async ({ messages }) => { 
-                      const msg = messages[0]; 
-                      if(!msg.message || msg.key.fromMe) return; 
-                      try { 
-                          const realNumber = (msg.key.participant || msg.key.remoteJid).split('@')[0]; 
-                          await axios.post(N8N_URL, { 
-                             from: realNumber, 
-                             text: msg.message.conversation || msg.message.extendedTextMessage?.text, 
-                             name: msg.pushName, 
-                             full_json: msg 
-                          }); 
-                      } catch (e) {} 
-                  });
-
+                  sock.ev.on('connection.update', async (u) => { const { connection, lastDisconnect, qr } = u; if(qr) qrData = qr; if(connection === 'open') { qrData = null; console.log("✅ Connected"); } if(connection === 'close') { const code = lastDisconnect.error?.output?.statusCode; if(code === DisconnectReason.loggedOut) { await clear(); process.exit(1); } else { setTimeout(start, 3000); } } });
+                  sock.ev.on('messages.upsert', async ({ messages }) => { const msg = messages[0]; if(!msg.message || msg.key.fromMe) return; try { const realNumber = (msg.key.participant || msg.key.remoteJid).split('@')[0]; await axios.post(N8N_URL, { from: realNumber, text: msg.message.conversation || msg.message.extendedTextMessage?.text, name: msg.pushName, full_json: msg }); } catch (e) {} });
               } catch (e) { setTimeout(start, 5000); }
           }
-
-          app.post('/send', async (req, res) => { try { if (!sock) return res.status(503).json({ error: "Starting" }); const { number, message } = req.body; const fullId = number.includes('@') ? number : `${number}@s.whatsapp.net`; await sock.sendMessage(fullId, { text: message }); res.json({ status: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
+          app.post('/send', async (req, res) => { try { if (!sock) return res.status(503).json({ error: "Start" }); const { number, message } = req.body; const fullId = number.includes('@') ? number : `${number}@s.whatsapp.net`; await sock.sendMessage(fullId, { text: message }); res.json({ status: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
           app.get('/qr', async (req, res) => { if(sock?.user && !qrData) return res.send('<h1>✅ Connected</h1><a href="/reset">Reset</a>'); if(!qrData) return res.send('<h1>⏳ Generating...</h1>'); const url = await QRCode.toDataURL(qrData); res.send(`<div style="text-align:center"><h1>Scan QR</h1><img src="${url}" /><br/><a href="/reset">Reset DB</a></div>`); });
           app.get('/reset', async (req, res) => { if(global.clear) await global.clear(); res.send("<h1>Wiped. Restarting...</h1>"); process.exit(1); });
           app.listen(PORT, () => { console.log(`Bot on ${PORT}`); start(); });
           EOF
 
-      # ------------------------------------------------------------------
-      # 6. SETUP SELF-HEALING WATCHDOG (The Protector)
-      # ------------------------------------------------------------------
+      # ==================================================================
+      # 6. SETUP UNIVERSAL WATCHDOG (Protects 3 Containers)
+      # ==================================================================
       - name: 🛡️ Setup Watchdog
         run: |
           cat << 'EOF' > watchdog.sh
           #!/bin/bash
           while true; do
-            if ! docker ps | grep -q n8n; then
-               echo "🚨 Watchdog: n8n died! Restarting..."
-               docker restart n8n
-            fi
-            if ! docker ps | grep -q wa-bot; then
-               echo "🚨 Watchdog: Bot died! Restarting..."
-               docker restart wa-bot
-            fi
+            # 1. Check n8n
+            if ! docker ps | grep -q n8n; then echo "🚨 n8n Down! Restarting..."; docker restart n8n; fi
+            # 2. Check WhatsApp Bot
+            if ! docker ps | grep -q wa-bot; then echo "🚨 Bot Down! Restarting..."; docker restart wa-bot; fi
+            # 3. Check AI Server
+            if ! docker ps | grep -q ai-server; then echo "🚨 AI Down! Restarting..."; docker restart ai-server; fi
             sleep 10
           done
           EOF
           chmod +x watchdog.sh
 
-      # ------------------------------------------------------------------
-      # 7. LAUNCH SYSTEM (Simple & Clean)
-      # ------------------------------------------------------------------
-      - name: 🚀 Launch v35
+      # ==================================================================
+      # 7. LAUNCH SYSTEM (Tri-Hybrid Network)
+      # ==================================================================
+      - name: 🚀 Launch v36
         run: |
           docker network create bot-net
 
-          # Simple Caddy Routing
+          # Caddy Routing (Directs traffic correctly)
           cat << 'EOF' > Caddyfile
           :80 {
+            # Route /chat to AI Server (Plan B)
+            reverse_proxy /chat ai-server:5000
+            
+            # WhatsApp Routes
             reverse_proxy /qr wa-bot:10000
             reverse_proxy /reset wa-bot:10000
             reverse_proxy /send wa-bot:10000
             
+            # Dashboard
             handle /dash {
                root * /srv/public
                file_server
                try_files {path} /index.html
             }
             
+            # Default to n8n
             reverse_proxy /* n8n:5678
           }
           EOF
 
-          # Start Containers (Removed Python AI)
+          # 1. Start Caddy
           docker run -d --name caddy --network bot-net -p 80:80 \
             -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile \
             -v $(pwd)/public:/srv/public \
             caddy:latest
 
+          # 2. Start AI Server (Plan B)
+          docker run -d --name ai-server --network bot-net \
+            -v $(pwd)/ai:/app -w /app \
+            python:3.9-slim sh -c "pip install flask g4f curl_cffi && python ai_server.py"
+
+          # 3. Start n8n
           docker run -d --name n8n --network bot-net \
             -v $(pwd)/n8n_data:/home/node/.n8n \
             -e N8N_ENCRYPTION_KEY="kuchbhi123" \
@@ -270,19 +267,20 @@ jobs:
             -e WEBHOOK_URL="https://${{ secrets.NGROK_DOMAIN }}" \
             n8nio/n8n
 
+          # 4. Start WhatsApp Bot
           docker run -d --name wa-bot --network bot-net \
             -v $(pwd)/whatsapp:/app -w /app \
             -e MONGODB_URI="${{ secrets.MONGODB_URI }}" \
             node:20-alpine sh -c "apk add --no-cache git && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
-      # ------------------------------------------------------------------
+      # ==================================================================
       # 8. MONITORING LOOP
-      # ------------------------------------------------------------------
-      - name: 🔄 Sync Loop
+      # ==================================================================
+      - name: 🔄 System Loop
         env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: |
-          echo "✅ System Live!"
+          echo "✅ System Live at https://${{ secrets.NGROK_DOMAIN }}"
           
           # Start Watchdog
           ./watchdog.sh &

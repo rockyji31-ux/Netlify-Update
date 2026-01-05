@@ -1,4 +1,4 @@
-name: "Production v43 (Relay Race + Auto-Install Nodes)"
+name: "Production v44 (Auto-Nodes Fixed + Stable)"
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
     - cron: '0 */6 * * *'
 
 jobs:
-  run-auto-install:
+  run-v44-stable:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
@@ -93,7 +93,7 @@ jobs:
           chmod -R 777 n8n_data
 
       # ==================================================================
-      # 4. SERVICES (With Auto-Install Logic)
+      # 4. SERVICES (With SAFE Auto-Install)
       # ==================================================================
       - name: 🚀 Launch Services
         run: |
@@ -111,21 +111,21 @@ jobs:
           EOF
           docker run -d --name ai-server --network bot-net -v $(pwd)/ai:/app -w /app python:3.9-slim sh -c "pip install flask g4f curl_cffi && python ai_server.py"
 
-          # 🛑 HERE IS THE MAGIC FIX FOR NODES 🛑
-          # We force install the nodes before starting n8n
+          # 🛑 FIXED COMMAND: Local Install (No Root Needed) 🛑
+          # This installs nodes inside the data folder, which is safe.
           docker run -d --name n8n --network bot-net \
             -v $(pwd)/n8n_data:/home/node/.n8n \
             -e N8N_ENCRYPTION_KEY="${{ secrets.N8N_ENCRYPTION_KEY }}" \
             -e N8N_SECURE_COOKIE=false \
             -e WEBHOOK_URL="https://${{ secrets.NGROK_DOMAIN }}" \
-            --entrypoint /bin/sh \
-            n8nio/n8n -c "npm install -g n8n-nodes-datastore n8n-nodes-run-node-with-credentials-x n8n-nodes-tesseractjs && n8n"
+            n8nio/n8n \
+            sh -c "cd /home/node/.n8n && npm install n8n-nodes-datastore n8n-nodes-run-node-with-credentials-x n8n-nodes-tesseractjs && n8n"
 
           # WhatsApp Bot
           mkdir whatsapp public
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
           
-          # Bot Index Logic
+          # Bot Logic
           cat << 'EOF' > whatsapp/index.js
           const { default: makeWASocket, DisconnectReason, BufferJSON, useMultiFileAuthState, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
           const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino');
@@ -170,7 +170,7 @@ jobs:
           docker run -d --name wa-bot --network bot-net -v $(pwd)/whatsapp:/app -w /app -e MONGODB_URI="${{ secrets.MONGODB_URI }}" node:20-alpine sh -c "apk add --no-cache git && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
       # ==================================================================
-      # 5. THE RELAY LOGIC (Timer & Handover)
+      # 5. THE RELAY LOGIC
       # ==================================================================
       - name: ⏱️ Run Relay Timer
         env:
@@ -183,7 +183,6 @@ jobs:
           while true; do
              CURRENT_TIME=$(date +%s); ELAPSED=$((CURRENT_TIME - START_TIME))
              
-             # Trigger Next Runner at 5h 45m
              if [ $ELAPSED -ge 20700 ] && [ "$TRIGGERED" = false ]; then
                  echo "🔫 TRIGGERING NEXT RUNNER..."
                  gh workflow run main.yml
@@ -191,7 +190,6 @@ jobs:
                  node smart_sync.js up
              fi
 
-             # Kill Self at 5h 48m
              if [ $ELAPSED -ge 20880 ]; then
                  echo "🛑 Time's Up!"; node smart_sync.js up; exit 0
              fi

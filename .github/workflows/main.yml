@@ -1,4 +1,4 @@
-name: "Production v44 (Auto-Nodes Fixed + Stable)"
+name: "Production v45 (Pre-Installed Nodes + Permissions Fix)"
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
     - cron: '0 */6 * * *'
 
 jobs:
-  run-v44-stable:
+  run-v45-stable:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
@@ -23,7 +23,7 @@ jobs:
           sudo mkswap /swapfile && sudo swapon /swapfile
           sudo sysctl -w net.core.default_qdisc=fq
           sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
-          echo "✅ Tuning Complete"
+          echo "✅ Server Tuned"
 
       # ==================================================================
       # 2. TUNNELING
@@ -39,33 +39,44 @@ jobs:
           echo "✅ Tunnel Live"
 
       # ==================================================================
-      # 3. SMART PERSISTENCE
+      # 3. SMART PERSISTENCE & NODE INSTALLATION
       # ==================================================================
-      - name: 💾 Setup Persistence
+      - name: 💾 Setup Data & Install Nodes
+        env:
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: |
           npm install @supabase/supabase-js
           mkdir -p n8n_data
           
+          # --- 🛑 FIX: PRE-INSTALL NODES ON HOST 🛑 ---
+          echo "📦 Installing Community Nodes..."
+          mkdir -p n8n_data/nodes
+          cd n8n_data/nodes
+          npm init -y
+          npm install n8n-nodes-datastore n8n-nodes-run-node-with-credentials-x n8n-nodes-tesseractjs
+          cd ../..
+          
+          # --- 🛑 FIX: PERMISSIONS (CRITICAL) 🛑 ---
+          # User 1000 is the 'node' user inside the container
+          echo "🔒 Fixing Permissions..."
+          sudo chown -R 1000:1000 n8n_data
+          
+          # Create Sync Script
           cat << 'EOF' > smart_sync.js
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
           const crypto = require('crypto');
           const path = 'n8n_data/database.sqlite';
-          
           const supabaseUrl = 'https://ymatdzammnejrmmiyygg.supabase.co';
           const supabase = createClient(supabaseUrl, process.env.SUPABASE_KEY);
           
-          function getFileHash(filePath) {
-             if (!fs.existsSync(filePath)) return null;
-             return crypto.createHash('md5').update(fs.readFileSync(filePath)).digest('hex');
-          }
-          
+          function getFileHash(p) { if (!fs.existsSync(p)) return null; return crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex'); }
           let lastHash = null;
 
           async function run(mode) {
             try {
                 if(mode==='down') {
-                  console.log("📥 Syncing Down...");
+                  console.log("📥 Downloading Backup...");
                   const { data, error } = await supabase.storage.from('bot-storage').download('database.sqlite');
                   if(!error) {
                      fs.writeFileSync(path, Buffer.from(await data.arrayBuffer()));
@@ -74,26 +85,24 @@ jobs:
                   } else { console.log("⚠️ Fresh Start"); }
                 } else {
                   if(!fs.existsSync(path)) return;
-                  const currentHash = getFileHash(path);
-                  if (currentHash === lastHash) { console.log("💤 No Changes."); return; }
-                  console.log(`📤 Changes Detected! Uploading...`);
+                  const cur = getFileHash(path);
+                  if (cur === lastHash) { console.log("💤 No Changes"); return; }
+                  console.log(`📤 Uploading Backup...`);
                   const { error } = await supabase.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(path), { upsert: true });
-                  if(!error) { console.log("✅ Upload Complete"); lastHash = currentHash; }
+                  if(!error) { console.log("✅ Saved"); lastHash = cur; }
                 }
             } catch (e) { console.error("Sync Error:", e.message); }
           }
           run(process.argv[2]);
           EOF
 
-      - name: 📥 Restore Data
-        env:
-          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-        run: |
+          # Restore Backup (Run as root is fine here, file ownership fixed later if needed, but we read as 1000)
           node smart_sync.js down
-          chmod -R 777 n8n_data
+          # Re-fix permission for the database file specially
+          sudo chown -R 1000:1000 n8n_data
 
       # ==================================================================
-      # 4. SERVICES (With SAFE Auto-Install)
+      # 4. LAUNCH SERVICES
       # ==================================================================
       - name: 🚀 Launch Services
         run: |
@@ -111,21 +120,19 @@ jobs:
           EOF
           docker run -d --name ai-server --network bot-net -v $(pwd)/ai:/app -w /app python:3.9-slim sh -c "pip install flask g4f curl_cffi && python ai_server.py"
 
-          # 🛑 FIXED COMMAND: Local Install (No Root Needed) 🛑
-          # This installs nodes inside the data folder, which is safe.
+          # n8n (Standard Command - No Entrypoint Override)
+          # It will automatically see the nodes in /home/node/.n8n/nodes because we mapped n8n_data there
           docker run -d --name n8n --network bot-net \
             -v $(pwd)/n8n_data:/home/node/.n8n \
             -e N8N_ENCRYPTION_KEY="${{ secrets.N8N_ENCRYPTION_KEY }}" \
             -e N8N_SECURE_COOKIE=false \
             -e WEBHOOK_URL="https://${{ secrets.NGROK_DOMAIN }}" \
-            n8nio/n8n \
-            sh -c "cd /home/node/.n8n && npm install n8n-nodes-datastore n8n-nodes-run-node-with-credentials-x n8n-nodes-tesseractjs && n8n"
+            n8nio/n8n
 
           # WhatsApp Bot
-          mkdir whatsapp public
+          mkdir whatsapp
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
           
-          # Bot Logic
           cat << 'EOF' > whatsapp/index.js
           const { default: makeWASocket, DisconnectReason, BufferJSON, useMultiFileAuthState, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
           const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino');

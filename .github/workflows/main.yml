@@ -1,4 +1,4 @@
-name: "Production v46 (Fix: Permissions 777 + Auto-Nodes)"
+name: "Production v47 (Corruption-Proof: Safe Snapshot)"
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
     - cron: '0 */6 * * *'
 
 jobs:
-  run-v46-unlocked:
+  run-safe-backup:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
@@ -23,7 +23,10 @@ jobs:
           sudo mkswap /swapfile && sudo swapon /swapfile
           sudo sysctl -w net.core.default_qdisc=fq
           sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
-          echo "✅ Server Tuned"
+          
+          # Install SQLite3 for safe snapshots
+          sudo apt-get update && sudo apt-get install -y sqlite3
+          echo "✅ Server Tuned & SQLite Installed"
 
       # ==================================================================
       # 2. TUNNELING
@@ -39,21 +42,26 @@ jobs:
           echo "✅ Tunnel Live"
 
       # ==================================================================
-      # 3. SMART RESTORE & PERMISSIONS (THE FIX)
+      # 3. SAFE SNAPSHOT SYNC (The Anti-Corruption Layer)
       # ==================================================================
-      - name: 💾 Setup Data & Nodes
+      - name: 💾 Setup Data & Safe Sync
         env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: |
           npm install @supabase/supabase-js
           mkdir -p n8n_data/nodes
           
-          # 1. DOWNLOAD BACKUP FIRST
+          # 🛑 SMART SYNC V2: USES SNAPSHOTS 🛑
           cat << 'EOF' > smart_sync.js
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
           const crypto = require('crypto');
-          const path = 'n8n_data/database.sqlite';
+          const { execSync } = require('child_process');
+          
+          // Paths
+          const liveDb = 'n8n_data/database.sqlite';
+          const safeDb = 'n8n_data/database_snapshot.sqlite'; // Temp file for upload
+          
           const supabase = createClient('https://ymatdzammnejrmmiyygg.supabase.co', process.env.SUPABASE_KEY);
           
           function getFileHash(p) { if (!fs.existsSync(p)) return null; return crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex'); }
@@ -65,17 +73,39 @@ jobs:
                   console.log("📥 Downloading Backup...");
                   const { data, error } = await supabase.storage.from('bot-storage').download('database.sqlite');
                   if(!error) {
-                     fs.writeFileSync(path, Buffer.from(await data.arrayBuffer()));
-                     lastHash = getFileHash(path);
+                     // Save directly to Live DB path on restore
+                     fs.writeFileSync(liveDb, Buffer.from(await data.arrayBuffer()));
+                     lastHash = getFileHash(liveDb);
                      console.log(`✅ Restored (Hash: ${lastHash})`);
                   } else { console.log("⚠️ Fresh Start (No Backup Found)"); }
                 } else {
-                  if(!fs.existsSync(path)) return;
-                  const cur = getFileHash(path);
-                  if (cur === lastHash) { console.log("💤 No Changes"); return; }
-                  console.log(`📤 Uploading Backup...`);
-                  const { error } = await supabase.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(path), { upsert: true });
-                  if(!error) { console.log("✅ Saved"); lastHash = cur; }
+                  if(!fs.existsSync(liveDb)) return;
+                  
+                  // 🛡️ STEP 1: CREATE SAFE SNAPSHOT (Prevents Corruption)
+                  // This command freezes the DB for a millisecond to copy it safely
+                  try {
+                    if (fs.existsSync(safeDb)) fs.unlinkSync(safeDb);
+                    execSync(`sqlite3 ${liveDb} ".backup '${safeDb}'"`);
+                    console.log("📸 Snapshot created successfully.");
+                  } catch (err) {
+                    console.error("⚠️ Snapshot failed, using live DB (Risky):", err.message);
+                    fs.copyFileSync(liveDb, safeDb);
+                  }
+
+                  // 🛡️ STEP 2: CHECK HASH OF SNAPSHOT
+                  const currentHash = getFileHash(safeDb);
+                  if (currentHash === lastHash) { console.log("💤 No Changes."); return; }
+                  
+                  // 🛡️ STEP 3: UPLOAD SNAPSHOT
+                  console.log(`📤 Uploading Snapshot...`);
+                  const { error } = await supabase.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(safeDb), { upsert: true });
+                  
+                  if(!error) { 
+                      console.log("✅ Saved Safe Backup"); 
+                      lastHash = currentHash; 
+                  } else {
+                      console.error("❌ Upload Error:", error.message);
+                  }
                 }
             } catch (e) { console.error("Sync Error:", e.message); }
           }
@@ -84,18 +114,15 @@ jobs:
           
           node smart_sync.js down
           
-          # 2. INSTALL NODES (Locally)
+          # Install Nodes
           echo "📦 Installing Nodes..."
           cd n8n_data/nodes
           npm init -y
           npm install n8n-nodes-datastore n8n-nodes-run-node-with-credentials-x n8n-nodes-tesseractjs
           cd ../..
           
-          # 3. 🛑 UNLOCK PERMISSIONS (CHMOD 777) 🛑
-          # This ensures Docker can READ and WRITE the database
           echo "🔓 Unlocking Permissions..."
           sudo chmod -R 777 n8n_data
-          ls -lh n8n_data/ # Verify file exists in logs
 
       # ==================================================================
       # 4. LAUNCH SERVICES
@@ -116,7 +143,7 @@ jobs:
           EOF
           docker run -d --name ai-server --network bot-net -v $(pwd)/ai:/app -w /app python:3.9-slim sh -c "pip install flask g4f curl_cffi && python ai_server.py"
 
-          # n8n (Using Secrets Key + No Permission Issues)
+          # n8n
           docker run -d --name n8n --network bot-net \
             -v $(pwd)/n8n_data:/home/node/.n8n \
             -e N8N_ENCRYPTION_KEY="${{ secrets.N8N_ENCRYPTION_KEY }}" \

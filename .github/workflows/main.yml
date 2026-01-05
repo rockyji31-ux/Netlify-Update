@@ -1,4 +1,4 @@
-name: "Production v45 (Pre-Installed Nodes + Permissions Fix)"
+name: "Production v46 (Fix: Permissions 777 + Auto-Nodes)"
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
     - cron: '0 */6 * * *'
 
 jobs:
-  run-v45-stable:
+  run-v46-unlocked:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
@@ -39,36 +39,22 @@ jobs:
           echo "✅ Tunnel Live"
 
       # ==================================================================
-      # 3. SMART PERSISTENCE & NODE INSTALLATION
+      # 3. SMART RESTORE & PERMISSIONS (THE FIX)
       # ==================================================================
-      - name: 💾 Setup Data & Install Nodes
+      - name: 💾 Setup Data & Nodes
         env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: |
           npm install @supabase/supabase-js
-          mkdir -p n8n_data
-          
-          # --- 🛑 FIX: PRE-INSTALL NODES ON HOST 🛑 ---
-          echo "📦 Installing Community Nodes..."
           mkdir -p n8n_data/nodes
-          cd n8n_data/nodes
-          npm init -y
-          npm install n8n-nodes-datastore n8n-nodes-run-node-with-credentials-x n8n-nodes-tesseractjs
-          cd ../..
           
-          # --- 🛑 FIX: PERMISSIONS (CRITICAL) 🛑 ---
-          # User 1000 is the 'node' user inside the container
-          echo "🔒 Fixing Permissions..."
-          sudo chown -R 1000:1000 n8n_data
-          
-          # Create Sync Script
+          # 1. DOWNLOAD BACKUP FIRST
           cat << 'EOF' > smart_sync.js
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
           const crypto = require('crypto');
           const path = 'n8n_data/database.sqlite';
-          const supabaseUrl = 'https://ymatdzammnejrmmiyygg.supabase.co';
-          const supabase = createClient(supabaseUrl, process.env.SUPABASE_KEY);
+          const supabase = createClient('https://ymatdzammnejrmmiyygg.supabase.co', process.env.SUPABASE_KEY);
           
           function getFileHash(p) { if (!fs.existsSync(p)) return null; return crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex'); }
           let lastHash = null;
@@ -82,7 +68,7 @@ jobs:
                      fs.writeFileSync(path, Buffer.from(await data.arrayBuffer()));
                      lastHash = getFileHash(path);
                      console.log(`✅ Restored (Hash: ${lastHash})`);
-                  } else { console.log("⚠️ Fresh Start"); }
+                  } else { console.log("⚠️ Fresh Start (No Backup Found)"); }
                 } else {
                   if(!fs.existsSync(path)) return;
                   const cur = getFileHash(path);
@@ -95,11 +81,21 @@ jobs:
           }
           run(process.argv[2]);
           EOF
-
-          # Restore Backup (Run as root is fine here, file ownership fixed later if needed, but we read as 1000)
+          
           node smart_sync.js down
-          # Re-fix permission for the database file specially
-          sudo chown -R 1000:1000 n8n_data
+          
+          # 2. INSTALL NODES (Locally)
+          echo "📦 Installing Nodes..."
+          cd n8n_data/nodes
+          npm init -y
+          npm install n8n-nodes-datastore n8n-nodes-run-node-with-credentials-x n8n-nodes-tesseractjs
+          cd ../..
+          
+          # 3. 🛑 UNLOCK PERMISSIONS (CHMOD 777) 🛑
+          # This ensures Docker can READ and WRITE the database
+          echo "🔓 Unlocking Permissions..."
+          sudo chmod -R 777 n8n_data
+          ls -lh n8n_data/ # Verify file exists in logs
 
       # ==================================================================
       # 4. LAUNCH SERVICES
@@ -120,8 +116,7 @@ jobs:
           EOF
           docker run -d --name ai-server --network bot-net -v $(pwd)/ai:/app -w /app python:3.9-slim sh -c "pip install flask g4f curl_cffi && python ai_server.py"
 
-          # n8n (Standard Command - No Entrypoint Override)
-          # It will automatically see the nodes in /home/node/.n8n/nodes because we mapped n8n_data there
+          # n8n (Using Secrets Key + No Permission Issues)
           docker run -d --name n8n --network bot-net \
             -v $(pwd)/n8n_data:/home/node/.n8n \
             -e N8N_ENCRYPTION_KEY="${{ secrets.N8N_ENCRYPTION_KEY }}" \

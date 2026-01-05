@@ -1,15 +1,13 @@
-name: "Production v42 (Relay Race: Zero Downtime)"
+name: "Production v43 (Relay Race + Auto-Install Nodes)"
 
 on:
   workflow_dispatch:
-  # Fallback Cron (Agar kabhi API fail ho jaye to ye backup hai)
   schedule:
     - cron: '0 */6 * * *'
 
 jobs:
-  run-relay-race:
+  run-auto-install:
     runs-on: ubuntu-latest
-    # Timeout 6 Hours (Script usse pehle hi exit kar jayegi)
     timeout-minutes: 360
     
     steps:
@@ -19,7 +17,7 @@ jobs:
       # ==================================================================
       # 1. OPTIMIZATION
       # ==================================================================
-      - name: 🛠️ Optimization & Tuning
+      - name: 🛠️ Optimization
         run: |
           sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
           sudo mkswap /swapfile && sudo swapon /swapfile
@@ -41,7 +39,7 @@ jobs:
           echo "✅ Tunnel Live"
 
       # ==================================================================
-      # 3. SMART PERSISTENCE (Backup/Restore)
+      # 3. SMART PERSISTENCE
       # ==================================================================
       - name: 💾 Setup Persistence
         run: |
@@ -95,7 +93,7 @@ jobs:
           chmod -R 777 n8n_data
 
       # ==================================================================
-      # 4. SERVICES (AI, n8n, Bot, Proxy)
+      # 4. SERVICES (With Auto-Install Logic)
       # ==================================================================
       - name: 🚀 Launch Services
         run: |
@@ -113,11 +111,17 @@ jobs:
           EOF
           docker run -d --name ai-server --network bot-net -v $(pwd)/ai:/app -w /app python:3.9-slim sh -c "pip install flask g4f curl_cffi && python ai_server.py"
 
-          # n8n (Secrets Key)
-          docker run -d --name n8n --network bot-net -v $(pwd)/n8n_data:/home/node/.n8n -e N8N_ENCRYPTION_KEY="${{ secrets.N8N_ENCRYPTION_KEY }}" -e N8N_SECURE_COOKIE=false -e WEBHOOK_URL="https://${{ secrets.NGROK_DOMAIN }}" n8nio/n8n
+          # 🛑 HERE IS THE MAGIC FIX FOR NODES 🛑
+          # We force install the nodes before starting n8n
+          docker run -d --name n8n --network bot-net \
+            -v $(pwd)/n8n_data:/home/node/.n8n \
+            -e N8N_ENCRYPTION_KEY="${{ secrets.N8N_ENCRYPTION_KEY }}" \
+            -e N8N_SECURE_COOKIE=false \
+            -e WEBHOOK_URL="https://${{ secrets.NGROK_DOMAIN }}" \
+            --entrypoint /bin/sh \
+            n8nio/n8n -c "npm install -g n8n-nodes-datastore n8n-nodes-run-node-with-credentials-x n8n-nodes-tesseractjs && n8n"
 
-          # WhatsApp Bot & Caddy
-          # (Shortened for cleaner view, logic remains same as v41)
+          # WhatsApp Bot
           mkdir whatsapp public
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
           
@@ -170,43 +174,31 @@ jobs:
       # ==================================================================
       - name: ⏱️ Run Relay Timer
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }} # Uses Personal Access Token
+          GH_TOKEN: ${{ secrets.GH_PAT }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: |
           echo "✅ System Live at https://${{ secrets.NGROK_DOMAIN }}"
-          
           START_TIME=$(date +%s)
           TRIGGERED=false
-
           while true; do
-             CURRENT_TIME=$(date +%s)
-             ELAPSED=$((CURRENT_TIME - START_TIME))
+             CURRENT_TIME=$(date +%s); ELAPSED=$((CURRENT_TIME - START_TIME))
              
-             # --- TRIGGER NEXT RUNNER AT 5h 45m (20700 sec) ---
+             # Trigger Next Runner at 5h 45m
              if [ $ELAPSED -ge 20700 ] && [ "$TRIGGERED" = false ]; then
                  echo "🔫 TRIGGERING NEXT RUNNER..."
-                 # Sends API command to GitHub to start new job
                  gh workflow run main.yml
                  TRIGGERED=true
-                 
-                 echo "💾 Doing Pre-Handover Backup..."
                  node smart_sync.js up
              fi
 
-             # --- KILL SELF AT 5h 48m (20880 sec) ---
+             # Kill Self at 5h 48m
              if [ $ELAPSED -ge 20880 ]; then
-                 echo "🛑 Time's Up! Final Sync & Handover."
-                 node smart_sync.js up
-                 echo "👋 Goodbye!"
-                 exit 0
+                 echo "🛑 Time's Up!"; node smart_sync.js up; exit 0
              fi
 
-             # --- Normal Operation (Check every 15 mins) ---
-             # Watchdog
              if ! docker ps | grep -q n8n; then docker restart n8n; fi
              if ! docker ps | grep -q wa-bot; then docker restart wa-bot; fi
              
-             # Sync & Sleep
              node smart_sync.js up
              sleep 900
           done

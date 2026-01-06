@@ -1,12 +1,19 @@
-name: "Production v47 (Corruption-Proof: Safe Snapshot)"
+name: "Production v48 (Highlander: Only 1 Active Bot)"
 
 on:
   workflow_dispatch:
   schedule:
     - cron: '0 */6 * * *'
 
+# 🛑 THIS IS THE FIX (Concurrency Group) 🛑
+# इसका मतलब: "Production Bot" नाम का सिर्फ 1 रनर चल सकता है।
+# जैसे ही नया आएगा, पुराना वाला (cancel-in-progress: true) मर जाएगा।
+concurrency:
+  group: "production-bot-v1"
+  cancel-in-progress: true
+
 jobs:
-  run-safe-backup:
+  run-highlander:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
@@ -23,10 +30,8 @@ jobs:
           sudo mkswap /swapfile && sudo swapon /swapfile
           sudo sysctl -w net.core.default_qdisc=fq
           sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
-          
-          # Install SQLite3 for safe snapshots
           sudo apt-get update && sudo apt-get install -y sqlite3
-          echo "✅ Server Tuned & SQLite Installed"
+          echo "✅ Server Tuned"
 
       # ==================================================================
       # 2. TUNNELING
@@ -42,7 +47,7 @@ jobs:
           echo "✅ Tunnel Live"
 
       # ==================================================================
-      # 3. SAFE SNAPSHOT SYNC (The Anti-Corruption Layer)
+      # 3. SAFE SNAPSHOT SYNC
       # ==================================================================
       - name: 💾 Setup Data & Safe Sync
         env:
@@ -51,17 +56,15 @@ jobs:
           npm install @supabase/supabase-js
           mkdir -p n8n_data/nodes
           
-          # 🛑 SMART SYNC V2: USES SNAPSHOTS 🛑
+          # SMART SYNC (Snapshot Logic)
           cat << 'EOF' > smart_sync.js
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs');
           const crypto = require('crypto');
           const { execSync } = require('child_process');
           
-          // Paths
           const liveDb = 'n8n_data/database.sqlite';
-          const safeDb = 'n8n_data/database_snapshot.sqlite'; // Temp file for upload
-          
+          const safeDb = 'n8n_data/database_snapshot.sqlite';
           const supabase = createClient('https://ymatdzammnejrmmiyygg.supabase.co', process.env.SUPABASE_KEY);
           
           function getFileHash(p) { if (!fs.existsSync(p)) return null; return crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex'); }
@@ -73,39 +76,23 @@ jobs:
                   console.log("📥 Downloading Backup...");
                   const { data, error } = await supabase.storage.from('bot-storage').download('database.sqlite');
                   if(!error) {
-                     // Save directly to Live DB path on restore
                      fs.writeFileSync(liveDb, Buffer.from(await data.arrayBuffer()));
                      lastHash = getFileHash(liveDb);
                      console.log(`✅ Restored (Hash: ${lastHash})`);
-                  } else { console.log("⚠️ Fresh Start (No Backup Found)"); }
+                  } else { console.log("⚠️ Fresh Start"); }
                 } else {
                   if(!fs.existsSync(liveDb)) return;
-                  
-                  // 🛡️ STEP 1: CREATE SAFE SNAPSHOT (Prevents Corruption)
-                  // This command freezes the DB for a millisecond to copy it safely
                   try {
                     if (fs.existsSync(safeDb)) fs.unlinkSync(safeDb);
                     execSync(`sqlite3 ${liveDb} ".backup '${safeDb}'"`);
-                    console.log("📸 Snapshot created successfully.");
-                  } catch (err) {
-                    console.error("⚠️ Snapshot failed, using live DB (Risky):", err.message);
-                    fs.copyFileSync(liveDb, safeDb);
-                  }
+                  } catch (err) { fs.copyFileSync(liveDb, safeDb); }
 
-                  // 🛡️ STEP 2: CHECK HASH OF SNAPSHOT
                   const currentHash = getFileHash(safeDb);
                   if (currentHash === lastHash) { console.log("💤 No Changes."); return; }
                   
-                  // 🛡️ STEP 3: UPLOAD SNAPSHOT
                   console.log(`📤 Uploading Snapshot...`);
                   const { error } = await supabase.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(safeDb), { upsert: true });
-                  
-                  if(!error) { 
-                      console.log("✅ Saved Safe Backup"); 
-                      lastHash = currentHash; 
-                  } else {
-                      console.error("❌ Upload Error:", error.message);
-                  }
+                  if(!error) { console.log("✅ Saved"); lastHash = currentHash; }
                 }
             } catch (e) { console.error("Sync Error:", e.message); }
           }
@@ -114,13 +101,8 @@ jobs:
           
           node smart_sync.js down
           
-          # Install Nodes
           echo "📦 Installing Nodes..."
-          cd n8n_data/nodes
-          npm init -y
-          npm install n8n-nodes-datastore n8n-nodes-run-node-with-credentials-x n8n-nodes-tesseractjs
-          cd ../..
-          
+          cd n8n_data/nodes && npm init -y && npm install n8n-nodes-datastore n8n-nodes-run-node-with-credentials-x n8n-nodes-tesseractjs && cd ../..
           echo "🔓 Unlocking Permissions..."
           sudo chmod -R 777 n8n_data
 
@@ -131,7 +113,6 @@ jobs:
         run: |
           docker network create bot-net
 
-          # AI Server
           mkdir ai
           cat << 'EOF' > ai/ai_server.py
           import g4f, flask; from flask import request, jsonify; app = flask.Flask(__name__)
@@ -143,7 +124,6 @@ jobs:
           EOF
           docker run -d --name ai-server --network bot-net -v $(pwd)/ai:/app -w /app python:3.9-slim sh -c "pip install flask g4f curl_cffi && python ai_server.py"
 
-          # n8n
           docker run -d --name n8n --network bot-net \
             -v $(pwd)/n8n_data:/home/node/.n8n \
             -e N8N_ENCRYPTION_KEY="${{ secrets.N8N_ENCRYPTION_KEY }}" \
@@ -151,7 +131,6 @@ jobs:
             -e WEBHOOK_URL="https://${{ secrets.NGROK_DOMAIN }}" \
             n8nio/n8n
 
-          # WhatsApp Bot
           mkdir whatsapp
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
           
@@ -185,21 +164,12 @@ jobs:
           app.get('/reset', async (req, res) => { if(global.clear) await global.clear(); res.send("<h1>Wiped. Restarting...</h1>"); process.exit(1); });
           app.listen(PORT, () => { console.log(`Bot on ${PORT}`); start(); });
           EOF
-
-          cat << 'EOF' > Caddyfile
-          :80 {
-            reverse_proxy /chat ai-server:5000
-            reverse_proxy /qr wa-bot:10000
-            reverse_proxy /send wa-bot:10000
-            reverse_proxy /* n8n:5678
-          }
-          EOF
           
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile caddy:latest
           docker run -d --name wa-bot --network bot-net -v $(pwd)/whatsapp:/app -w /app -e MONGODB_URI="${{ secrets.MONGODB_URI }}" node:20-alpine sh -c "apk add --no-cache git && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
       # ==================================================================
-      # 5. THE RELAY LOGIC
+      # 5. THE HIGHLANDER LOGIC (Backup -> Trigger -> Die)
       # ==================================================================
       - name: ⏱️ Run Relay Timer
         env:
@@ -212,15 +182,17 @@ jobs:
           while true; do
              CURRENT_TIME=$(date +%s); ELAPSED=$((CURRENT_TIME - START_TIME))
              
-             if [ $ELAPSED -ge 20700 ] && [ "$TRIGGERED" = false ]; then
-                 echo "🔫 TRIGGERING NEXT RUNNER..."
-                 gh workflow run main.yml
-                 TRIGGERED=true
+             # Trigger Next Runner at 5h 50m (21000 sec)
+             if [ $ELAPSED -ge 21000 ] && [ "$TRIGGERED" = false ]; then
+                 echo "💾 Performing FINAL BACKUP before Death..."
                  node smart_sync.js up
-             fi
-
-             if [ $ELAPSED -ge 20880 ]; then
-                 echo "🛑 Time's Up!"; node smart_sync.js up; exit 0
+                 
+                 echo "🔫 TRIGGERING NEW RUNNER..."
+                 gh workflow run main.yml
+                 
+                 echo "💀 I will be killed by Concurrency in a moment..."
+                 TRIGGERED=true
+                 sleep 300 # Wait for the new runner to kill me
              fi
 
              if ! docker ps | grep -q n8n; then docker restart n8n; fi

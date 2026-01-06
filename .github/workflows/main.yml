@@ -1,4 +1,4 @@
-name: "Production v54 (Comfort: Auto-Rename + Key Sending)"
+name: "Production v56 (Final Fix: spawnSync Logic)"
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  run-v54-comfort:
+  run-v56-bulletproof:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
@@ -19,15 +19,17 @@ jobs:
         uses: actions/checkout@v3
 
       # ==================================================================
-      # 1. OPTIMIZATION & NGROK
+      # 1. OPTIMIZATION & TOOLS
       # ==================================================================
       - name: ⚡ Tune System & Install Tools
         run: |
           sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
           sudo sysctl -w net.core.default_qdisc=fq && sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
+          
+          # Install Dependencies
           sudo apt-get update && sudo apt-get install -y sqlite3 curl
           
-          # Install Ngrok
+          # Install Ngrok (Official)
           curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
           echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
           sudo apt-get update && sudo apt-get install -y ngrok
@@ -46,22 +48,22 @@ jobs:
           key: n8n-nodes-v1-${{ runner.os }}
 
       # ==================================================================
-      # 3. SMART SYNC (WITH RENAMING & KEY SENDING)
+      # 3. SMART SYNC (SPAWNSYNC FIX)
       # ==================================================================
       - name: 💾 Setup Data & Sync Logic
         env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # 👇 SECRET KEY ADDED HERE FOR SCRIPT ACCESS 👇
           N8N_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
         run: |
           mkdir -p n8n_data/nodes
           
-          # --- SMART SYNC SCRIPT ---
+          # --- SMART SYNC SCRIPT (Using spawnSync to fix Shell Errors) ---
           cat << 'EOF' > smart_sync.js
           const { createClient } = require('@supabase/supabase-js');
-          const fs = require('fs'); const crypto = require('crypto'); const { execSync } = require('child_process');
+          const fs = require('fs'); const crypto = require('crypto'); 
+          const { execSync, spawnSync } = require('child_process');
           
           const live='n8n_data/database.sqlite', safe='n8n_data/db_snap.sqlite';
           const sb = createClient('https://ymatdzammnejrmmiyygg.supabase.co', process.env.SUPABASE_KEY);
@@ -91,16 +93,25 @@ jobs:
                    fs.writeFileSync('last_hash', h); 
                    console.log("✅ Supabase Sync Complete");
                    
-                   // TELEGRAM BACKUP (Renamed + Key)
+                   // TELEGRAM BACKUP (spawnSync Fix)
                    try {
-                     // 1. Prepare Caption with Key
-                     const caption = "💾 Backup: " + new Date().toISOString() + "\n🔑 Key: <code>" + process.env.N8N_KEY + "</code>";
+                     const caption = "💾 <b>Backup Saved</b>\n📅 Time: " + new Date().toISOString() + "\n🔑 Key: <code>" + process.env.N8N_KEY + "</code>";
                      
-                     // 2. Curl Magic: ;filename=database.sqlite forces Telegram to see the new name
-                     const cmd = "curl -s -F chat_id=" + process.env.TG_ID + " -F document=@" + safe + ";filename=database.sqlite -F caption=\"" + caption + "\" -F parse_mode=HTML https://api.telegram.org/bot" + process.env.TG_TOKEN + "/sendDocument";
+                     // We pass arguments as an Array. No shell interpretation = No crashes.
+                     const args = [
+                        "-s",
+                        "-F", "chat_id=" + process.env.TG_ID,
+                        "-F", "document=@" + safe + ";filename=database.sqlite",
+                        "-F", "caption=" + caption,
+                        "-F", "parse_mode=HTML",
+                        "https://api.telegram.org/bot" + process.env.TG_TOKEN + "/sendDocument"
+                     ];
+
+                     const result = spawnSync("curl", args);
                      
-                     execSync(cmd);
-                     console.log("✈️ Sent to Telegram with Key");
+                     if(result.error) { console.error("Spawn Error:", result.error); }
+                     else { console.log("✈️ Sent to Telegram (Safe Mode)"); }
+                     
                    } catch(err) { console.error("Telegram Error:", err.message); }
                 }
               }
@@ -192,7 +203,7 @@ jobs:
           EOF
 
           # Dashboard & Caddy
-          echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="30"><title>Status</title></head><body style="background:#000;color:#0f0;text-align:center;padding:50px;"><h1>🚀 v54 Active</h1><a href="/workflow" style="color:#fff">Open n8n</a></body></html>' > public/index.html
+          echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="30"><title>Status</title></head><body style="background:#000;color:#0f0;text-align:center;padding:50px;"><h1>🚀 v56 Active</h1><a href="/workflow" style="color:#fff">Open n8n</a></body></html>' > public/index.html
           printf ":80 {\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n reverse_proxy /send wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n  try_files {path} /index.html\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
 
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile -v $(pwd)/public:/srv/public caddy:latest
@@ -207,7 +218,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # Also need Key here for final backup trigger
+          # Need Key here too for manual triggers/backup calls inside loop
           N8N_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
         run: |
           START=$(date +%s); TRIGGERED=false

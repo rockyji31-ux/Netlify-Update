@@ -1,17 +1,16 @@
-name: "Production v52 (Final Stable: Cache + Telegram + Fixes)"
+name: "Production v53 (Final Fix: Syntax & Ngrok)"
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *' # हर 6 घंटे में ऑटो-स्टार्ट
+    - cron: '0 */6 * * *'
 
-# 🛑 HIGHLANDER RULE: Only 1 active runner allowed 🛑
 concurrency:
   group: "production-bot"
   cancel-in-progress: true
 
 jobs:
-  run-v52-stable:
+  run-v53-polished:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
@@ -20,52 +19,28 @@ jobs:
         uses: actions/checkout@v3
 
       # ==================================================================
-      # 1. OPTIMIZATION & NGROK INSTALL (FIXED)
+      # 1. OPTIMIZATION & NGROK INSTALL (PATCHED)
       # ==================================================================
       - name: ⚡ Tune System & Install Tools
         run: |
-          # 1. Swap Memory (RAM Booster)
+          # 1. Swap & BBR
           sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
-          
-          # 2. Network Speed (Google BBR)
           sudo sysctl -w net.core.default_qdisc=fq && sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
           
-          # 3. Install Dependencies (SQLite, Curl)
+          # 2. Install Dependencies
           sudo apt-get update && sudo apt-get install -y sqlite3 curl
           
-          # 4. Install Ngrok (The Manual Way - FIXED)
+          # 3. Install Ngrok (Official Robust Method)
           curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
           echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
-          sudo apt update && sudo apt install ngrok
+          sudo apt-get update
+          sudo apt-get install -y ngrok
           
           npm install @supabase/supabase-js
-          echo "✅ System Tuned & Tools Installed"
+          echo "✅ System Ready"
 
       # ==================================================================
-      # 2. TELEGRAM PRE-FLIGHT CHECK (New)
-      # ==================================================================
-      - name: 📡 Test Telegram Connection
-        env:
-          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          echo "Testing Telegram credentials..."
-          RESPONSE=$(curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/getMe)
-          if [[ $RESPONSE != *"username"* ]]; then
-            echo "❌ Error: Bot Token Invalid!"
-            exit 1
-          fi
-          # Send a silent text to verify Chat ID
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🔍 System Init...")
-          if [ "$STATUS" -ne 200 ]; then
-            echo "❌ Error: Telegram Chat ID ($TG_ID) is incorrect or Bot hasn't been started."
-            echo "👉 Fix: Open your bot in Telegram and send /start"
-            exit 1
-          fi
-          echo "✅ Telegram Connection Verified"
-
-      # ==================================================================
-      # 3. CACHING (Turbo Mode)
+      # 2. CACHING
       # ==================================================================
       - name: 📦 Cache Community Nodes
         id: node-cache
@@ -75,7 +50,7 @@ jobs:
           key: n8n-nodes-v1-${{ runner.os }}
 
       # ==================================================================
-      # 4. SMART SYNC & RESTORE
+      # 3. SMART SYNC (SYNTAX ERROR FIXED)
       # ==================================================================
       - name: 💾 Setup Data & Sync Logic
         env:
@@ -85,7 +60,7 @@ jobs:
         run: |
           mkdir -p n8n_data/nodes
           
-          # --- SMART SYNC SCRIPT ---
+          # --- SMART SYNC SCRIPT (Safe Strings) ---
           cat << 'EOF' > smart_sync.js
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs'); const crypto = require('crypto'); const { execSync } = require('child_process');
@@ -100,19 +75,17 @@ jobs:
               if(mode==='down') {
                 console.log("📥 Downloading from Supabase...");
                 const { data, error } = await sb.storage.from('bot-storage').download('database.sqlite');
-                if(!error) { fs.writeFileSync(live, Buffer.from(await data.arrayBuffer())); console.log(`✅ Restored Hash: ${hash(live)}`); }
+                if(!error) { fs.writeFileSync(live, Buffer.from(await data.arrayBuffer())); console.log("✅ Restored Hash: " + hash(live)); }
                 else console.log("⚠️ Fresh Start (No Backup)");
               } else {
-                // Upload Mode
                 if(!fs.existsSync(live)) return;
                 
-                // 1. Snapshot creation
-                try { if(fs.existsSync(safe)) fs.unlinkSync(safe); execSync(`sqlite3 ${live} ".backup '${safe}'"`); } catch(e) { fs.copyFileSync(live, safe); }
+                try { if(fs.existsSync(safe)) fs.unlinkSync(safe); execSync("sqlite3 " + live + " \".backup '" + safe + "'\""); } 
+                catch(e) { fs.copyFileSync(live, safe); }
                 
                 const h = hash(safe);
                 if(fs.existsSync('last_hash') && fs.readFileSync('last_hash','utf8') === h) { console.log("💤 No Changes"); return; }
                 
-                // 2. Upload to Supabase
                 console.log("📤 Changes Detected! Uploading...");
                 const { error } = await sb.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(safe), { upsert: true });
                 
@@ -120,13 +93,13 @@ jobs:
                    fs.writeFileSync('last_hash', h); 
                    console.log("✅ Supabase Sync Complete");
                    
-                   // 3. TELEGRAM FILE BACKUP
+                   // TELEGRAM BACKUP (Fixed Syntax)
                    try {
-                     const caption = \`💾 Backup: \${new Date().toISOString()}\`;
-                     // Use execSync for curl to handle file upload reliably
-                     execSync(\`curl -s -F chat_id=\${process.env.TG_ID} -F document=@\${safe} -F caption="\${caption}" https://api.telegram.org/bot\${process.env.TG_TOKEN}/sendDocument\`);
+                     const caption = "💾 Backup: " + new Date().toISOString();
+                     const cmd = "curl -s -F chat_id=" + process.env.TG_ID + " -F document=@" + safe + " -F caption=\"" + caption + "\" https://api.telegram.org/bot" + process.env.TG_TOKEN + "/sendDocument";
+                     execSync(cmd);
                      console.log("✈️ Sent to Telegram");
-                   } catch(err) { console.error("Telegram Error (Non-fatal):", err.message); }
+                   } catch(err) { console.error("Telegram Error:", err.message); }
                 }
               }
             } catch(e) { console.error("Sync Error:", e.message); }
@@ -134,14 +107,11 @@ jobs:
           run(process.argv[2]);
           EOF
           
-          # Restore Data
           node smart_sync.js down
-          
-          # Unlock Permissions
           sudo chmod -R 777 n8n_data
 
       # ==================================================================
-      # 5. INSTALL NODES (Only if Cache Miss)
+      # 4. INSTALL NODES
       # ==================================================================
       - name: 📥 Install Nodes (If not cached)
         if: steps.node-cache.outputs.cache-hit != 'true'
@@ -151,7 +121,7 @@ jobs:
           sudo chmod -R 777 n8n_data
 
       # ==================================================================
-      # 6. START SERVICES
+      # 5. START SERVICES
       # ==================================================================
       - name: 🚀 Launch Services
         env:
@@ -169,7 +139,7 @@ jobs:
           
           docker network create bot-net
 
-          # AI Server (Inline)
+          # AI Server
           mkdir ai && echo "import g4f,flask;app=flask.Flask(__name__);@app.route('/chat',methods=['POST'])" > ai/ai_server.py
           echo "def c():try:return flask.jsonify({'response':g4f.ChatCompletion.create(model=g4f.models.gpt_4,messages=[{'role':'user','content':flask.request.json.get('message')}])}) " >> ai/ai_server.py
           echo "except Exception as e:return flask.jsonify({'error':str(e)}),500" >> ai/ai_server.py
@@ -220,14 +190,14 @@ jobs:
           EOF
 
           # Dashboard & Caddy
-          echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="30"><title>Status</title></head><body style="background:#000;color:#0f0;text-align:center;padding:50px;"><h1>🚀 v52 Active</h1><a href="/workflow" style="color:#fff">Open n8n</a></body></html>' > public/index.html
+          echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="30"><title>Status</title></head><body style="background:#000;color:#0f0;text-align:center;padding:50px;"><h1>🚀 v53 Active</h1><a href="/workflow" style="color:#fff">Open n8n</a></body></html>' > public/index.html
           printf ":80 {\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n reverse_proxy /send wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n  try_files {path} /index.html\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
 
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile -v $(pwd)/public:/srv/public caddy:latest
           docker run -d --name wa-bot --network bot-net -v $(pwd)/whatsapp:/app -w /app -e MONGODB_URI="${{ secrets.MONGODB_URI }}" node:20-alpine sh -c "apk add --no-cache git && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
       # ==================================================================
-      # 7. FAST HANDOVER LOOP (5h 55m)
+      # 6. FAST HANDOVER LOOP (5h 55m)
       # ==================================================================
       - name: 🔄 Maintenance Loop
         env:
@@ -240,11 +210,9 @@ jobs:
           while true; do
              NOW=$(date +%s); DIFF=$((NOW - START))
              
-             # At 5h 55m (21300s)
              if [ $DIFF -ge 21300 ] && [ "$TRIGGERED" = false ]; then
                  echo "💾 Final Backup & Handover..."
                  node smart_sync.js up
-                 
                  echo "🔫 TRIGGERING NEXT RUNNER..."
                  gh workflow run main.yml
                  TRIGGERED=true
@@ -257,7 +225,7 @@ jobs:
           done
 
       # ==================================================================
-      # 8. FAILURE ALERT (Last Line of Defense)
+      # 7. FAILURE ALERT
       # ==================================================================
       - name: 🚨 Notify Failure
         if: failure()

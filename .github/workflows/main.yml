@@ -1,4 +1,4 @@
-name: Production v61 (Supervisor Safe Mode)
+name: "Production v60 (Final Stable: AI Curl Fix)"
 
 on:
   workflow_dispatch:
@@ -6,27 +6,37 @@ on:
     - cron: "0 */6 * * *"
 
 concurrency:
-  group: production-bot
+  group: "production-bot"
   cancel-in-progress: true
 
 jobs:
-  run:
+  run-v60-final:
     runs-on: ubuntu-latest
     timeout-minutes: 360
 
     steps:
     - uses: actions/checkout@v3
 
+    # =========================================================
+    # 1. SYSTEM + NGROK (UBUNTU 24 SAFE)
+    # =========================================================
     - name: Install tools
       run: |
-        sudo apt update
-        sudo apt install -y curl sqlite3 docker.io
-        curl -fsSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc
-        echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
-        sudo apt update && sudo apt install -y ngrok
+        sudo apt-get update
+        sudo apt-get install -y curl sqlite3 docker.io
+        sudo systemctl start docker
+
+        # Install ngrok (NO APT REPO — Ubuntu 24 safe)
+        curl -L https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz -o ngrok.tgz
+        tar -xzf ngrok.tgz
+        sudo mv ngrok /usr/local/bin/ngrok
+        sudo chmod +x /usr/local/bin/ngrok
+
         npm install @supabase/supabase-js
 
-    # Restore n8n DB
+    # =========================================================
+    # 2. RESTORE N8N FROM SUPABASE
+    # =========================================================
     - name: Restore n8n
       env:
         SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
@@ -41,22 +51,27 @@ jobs:
         })
         EOF
 
-    - name: Start services
+    # =========================================================
+    # 3. START STACK (SAFE ORDER)
+    # =========================================================
+    - name: Start stack
       env:
         NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
         NGROK_DOMAIN: ${{ secrets.NGROK_DOMAIN }}
         MONGODB_URI: ${{ secrets.MONGODB_URI }}
         N8N_ENCRYPTION_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
       run: |
-        docker network create bot-net
+        docker network create bot-net || true
 
-        # AI
+        # ---- AI SERVER ----
         docker run -d --name ai-server --network bot-net python:3.9-slim sh -c "
         pip install flask g4f curl_cffi &&
         python - <<'EOF'
         from flask import Flask,request,jsonify
         import g4f
         app=Flask(__name__)
+        @app.route('/health')
+        def h(): return 'ok'
         @app.route('/chat',methods=['POST'])
         def c():
           m=request.json.get('message')
@@ -65,29 +80,53 @@ jobs:
         app.run('0.0.0.0',5000)
         EOF"
 
-        # n8n
+        until docker exec ai-server curl -s http://localhost:5000/health; do sleep 5; done
+
+        # ---- N8N ----
         docker run -d --name n8n --network bot-net \
         -v $(pwd)/n8n_data:/home/node/.n8n \
         -e N8N_ENCRYPTION_KEY=$N8N_ENCRYPTION_KEY \
         -e WEBHOOK_URL=https://$NGROK_DOMAIN \
         n8nio/n8n
 
-        # WhatsApp
-        docker run -d --name wa --network bot-net \
+        # ---- WHATSAPP ----
+        docker run -d --name wa-bot --network bot-net \
         -e MONGODB_URI=$MONGODB_URI \
         ghcr.io/whiskeysockets/baileys
 
-        # Proxy
+        # ---- CADDY ----
         docker run -d --name caddy --network bot-net -p 80:80 caddy
 
-        ngrok config add-authtoken $NGROK_TOKEN
-        ngrok http --domain=$NGROK_DOMAIN 80 &
+        # Wait until port 80 is live (prevents ERR_NGROK_8012)
+        until curl -s http://localhost:80 >/dev/null; do sleep 3; done
 
-    - name: Run 5h55m then handoff
+        # ---- NGROK ----
+        ngrok config add-authtoken $NGROK_TOKEN
+        ngrok http --domain=$NGROK_DOMAIN 80 > /dev/null &
+
+    # =========================================================
+    # 4. 6-HOUR SUPERVISOR + HANDOFF
+    # =========================================================
+    - name: Supervisor
       env:
         GH_TOKEN: ${{ secrets.GH_PAT }}
         SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
       run: |
-        sleep 21300
-        node smart_sync.js up || true
-        gh workflow run main.yml
+        START=$(date +%s)
+
+        for i in {1..120}; do
+          sleep 180
+
+          # restart crashed containers
+          for c in ai-server n8n wa-bot caddy; do
+            if ! docker ps | grep -q $c; then docker restart $c; fi
+          done
+
+          # handoff at 5h55m
+          NOW=$(date +%s)
+          if [ $((NOW - START)) -gt 21300 ]; then
+            gh workflow run main.yml
+            sleep 600
+            exit 0
+          fi
+        done

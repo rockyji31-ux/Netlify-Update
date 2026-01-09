@@ -1,4 +1,4 @@
-name: "Production v63 (Final Stable Trial)"
+name: "Production v64 (Ngrok-Safe Final)"
 
 on:
   workflow_dispatch:
@@ -36,9 +36,7 @@ jobs:
           const fs = require('fs'), crypto = require('crypto'), { execSync } = require('child_process');
           const live='n8n_data/database.sqlite', safe='n8n_data/db_snap.sqlite';
           const sb = createClient('https://ymatdzammnejrmmiyygg.supabase.co', process.env.SUPABASE_SERVICE_ROLE);
-
           function hash(p){return fs.existsSync(p)?crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex'):null}
-
           async function run(m){
             try{
               if(m==='down'){
@@ -59,7 +57,7 @@ jobs:
           EOF
 
       # =====================================================
-      # 3. RESTORE n8n DB
+      # 3. RESTORE DB
       # =====================================================
       - name: Restore DB
         env:
@@ -70,28 +68,22 @@ jobs:
           chmod -R 777 n8n_data
 
       # =====================================================
-      # 4. START NGROK
+      # 4. INSTALL NGROK
       # =====================================================
-      - name: Start Ngrok
-        env:
-          NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
-          NGROK_DOMAIN: ${{ secrets.NGROK_DOMAIN }}
+      - name: Install Ngrok
         run: |
           curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
           echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
           sudo apt-get update && sudo apt-get install -y ngrok
-          ngrok config add-authtoken "$NGROK_TOKEN"
-          ngrok http --domain="$NGROK_DOMAIN" 80 >/dev/null &
-          sleep 5
 
       # =====================================================
-      # 5. LAUNCH DOCKER STACK
+      # 5. LAUNCH STACK (CORRECT ORDER)
       # =====================================================
       - name: Launch stack
         env:
+          NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
           NGROK_DOMAIN: ${{ secrets.NGROK_DOMAIN }}
           N8N_ENCRYPTION_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
-          MONGODB_URI: ${{ secrets.MONGODB_URI }}
         run: |
           docker network create bot-net || true
 
@@ -116,7 +108,9 @@ jobs:
 
           docker run -d --name ai-server --network bot-net -v $(pwd)/ai:/app -w /app python:3.9-slim sh -c "apt-get update && apt-get install -y curl && pip install flask g4f curl_cffi && python ai_server.py"
 
-          docker run -d --name n8n --network bot-net -v $(pwd)/n8n_data:/home/node/.n8n -e N8N_ENCRYPTION_KEY="$N8N_ENCRYPTION_KEY" -e WEBHOOK_URL="https://$NGROK_DOMAIN" n8nio/n8n
+          docker run -d --name n8n --network bot-net -v $(pwd)/n8n_data:/home/node/.n8n \
+            -e N8N_ENCRYPTION_KEY="$N8N_ENCRYPTION_KEY" \
+            -e WEBHOOK_URL="https://$NGROK_DOMAIN" n8nio/n8n
 
           cat << 'EOF' > Caddyfile
           :80 {
@@ -126,10 +120,17 @@ jobs:
           }
           EOF
 
+          # Caddy FIRST
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile caddy:latest
+          sleep 5
+
+          # Ngrok AFTER Caddy
+          ngrok config add-authtoken "$NGROK_TOKEN"
+          ngrok http --domain="$NGROK_DOMAIN" 80 >/dev/null &
+          sleep 5
 
       # =====================================================
-      # 6. PERIODIC BACKUP
+      # 6. BACKUP LOOP
       # =====================================================
       - name: Maintenance
         env:

@@ -1,4 +1,4 @@
-name: "Production v64 (Ngrok-Safe Final)"
+name: "Production v60.2 (Stable + AI Memory)"
 
 on:
   workflow_dispatch:
@@ -18,26 +18,28 @@ jobs:
       - uses: actions/checkout@v3
 
       # =====================================================
-      # 1. BASE TOOLS
+      # TOOLS
       # =====================================================
       - name: Install tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl sqlite3
+          sudo apt-get install -y sqlite3 curl
           npm install @supabase/supabase-js
 
       # =====================================================
-      # 2. CREATE SMART SYNC
+      # SUPABASE BACKUP
       # =====================================================
-      - name: Create smart_sync.js
+      - name: Smart Sync
+        env:
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: |
           cat << 'EOF' > smart_sync.js
           const { createClient } = require('@supabase/supabase-js');
-          const fs = require('fs'), crypto = require('crypto'), { execSync } = require('child_process');
-          const live='n8n_data/database.sqlite', safe='n8n_data/db_snap.sqlite';
-          const sb = createClient('https://ymatdzammnejrmmiyygg.supabase.co', process.env.SUPABASE_SERVICE_ROLE);
-          function hash(p){return fs.existsSync(p)?crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex'):null}
-          async function run(m){
+          const fs=require('fs'),crypto=require('crypto'),{execSync}=require('child_process');
+          const live='n8n_data/database.sqlite',safe='n8n_data/db_snap.sqlite';
+          const sb=createClient('https://ymatdzammnejrmmiyygg.supabase.co',process.env.SUPABASE_SERVICE_ROLE);
+          const hash=p=>fs.existsSync(p)?crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex'):null;
+          (async m=>{
             try{
               if(m==='down'){
                 const {data}=await sb.storage.from('bot-storage').download('database.sqlite');
@@ -51,92 +53,98 @@ jobs:
                 await sb.storage.from('bot-storage').upload('database.sqlite',fs.readFileSync(safe),{upsert:true});
                 fs.writeFileSync('last_hash',h);
               }
-            }catch(e){console.log("Sync:",e.message)}
-          }
-          run(process.argv[2]);
+            }catch(e){console.log(e.message)}
+          })(process.argv[2])
           EOF
-
-      # =====================================================
-      # 3. RESTORE DB
-      # =====================================================
-      - name: Restore DB
-        env:
-          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-        run: |
           mkdir -p n8n_data
           node smart_sync.js down || true
           chmod -R 777 n8n_data
 
       # =====================================================
-      # 4. INSTALL NGROK
+      # NGROK
       # =====================================================
-      - name: Install Ngrok
+      - name: Install ngrok
         run: |
           curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
           echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
           sudo apt-get update && sudo apt-get install -y ngrok
 
       # =====================================================
-      # 5. LAUNCH STACK (CORRECT ORDER)
+      # START STACK
       # =====================================================
-      - name: Launch stack
+      - name: Launch
         env:
           NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
           NGROK_DOMAIN: ${{ secrets.NGROK_DOMAIN }}
           N8N_ENCRYPTION_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
         run: |
           docker network create bot-net || true
 
-          mkdir -p ai
-          cat << 'EOF' > ai/ai_server.py
-          from flask import Flask, request, jsonify
+          # ---------- AI WITH MEMORY ----------
+          mkdir ai
+          cat << 'EOF' > ai/app.py
+          from flask import Flask,request,jsonify
           import g4f,time
           from collections import defaultdict
           app=Flask(__name__)
           mem=defaultdict(list)
-          @app.route('/chat',methods=['POST'])
+          TTL=300
+          MAX=6
+          @app.route("/chat",methods=["POST"])
           def chat():
-            d=request.json or {}; u=d.get("user","g"); m=d.get("message","")
-            t=time.time(); mem[u]=[x for x in mem[u] if t-x["t"]<300]
-            mem[u].append({"role":"user","content":m,"t":t}); mem[u]=mem[u][-5:]
-            try:r=g4f.ChatCompletion.create(model=g4f.models.gpt_4,messages=[{"role":x["role"],"content":x["content"]} for x in mem[u]],timeout=15)
-            except:r="AI busy"
+            d=request.json or {}
+            u=d.get("user","global"); m=d.get("message","")
+            t=time.time()
+            mem[u]=[x for x in mem[u] if t-x["t"]<TTL]
+            mem[u].append({"role":"user","content":m,"t":t})
+            mem[u]=mem[u][-MAX:]
+            try:
+              r=g4f.ChatCompletion.create(model=g4f.models.gpt_4,messages=[{"role":x["role"],"content":x["content"]} for x in mem[u]])
+            except:
+              r="AI busy"
             mem[u].append({"role":"assistant","content":r,"t":t})
+            mem[u]=mem[u][-MAX:]
             return jsonify({"response":r})
           app.run(host="0.0.0.0",port=5000)
           EOF
 
-          docker run -d --name ai-server --network bot-net -v $(pwd)/ai:/app -w /app python:3.9-slim sh -c "apt-get update && apt-get install -y curl && pip install flask g4f curl_cffi && python ai_server.py"
+          docker run -d --name ai --network bot-net -v $(pwd)/ai:/app -w /app python:3.9-slim sh -c "pip install flask g4f curl_cffi && python app.py"
 
+          # ---------- n8n ----------
           docker run -d --name n8n --network bot-net -v $(pwd)/n8n_data:/home/node/.n8n \
             -e N8N_ENCRYPTION_KEY="$N8N_ENCRYPTION_KEY" \
             -e WEBHOOK_URL="https://$NGROK_DOMAIN" n8nio/n8n
 
+          # ---------- WhatsApp ----------
+          mkdir whatsapp
+          echo '{"dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4","mongoose":"^8","qrcode":"^1.5.3","pino":"^8"}}' > whatsapp/package.json
+          docker run -d --name wa --network bot-net -v $(pwd)/whatsapp:/app -w /app -e MONGODB_URI="$MONGODB_URI" node:20-alpine sh -c "npm install && node index.js"
+
+          # ---------- Caddy ----------
           cat << 'EOF' > Caddyfile
           :80 {
-            rate_limit { zone global 30r/m }
-            reverse_proxy /chat ai-server:5000
+            reverse_proxy /chat ai:5000
             reverse_proxy /* n8n:5678
           }
           EOF
-
-          # Caddy FIRST
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile caddy:latest
-          sleep 5
 
-          # Ngrok AFTER Caddy
+          # Wait for Caddy
+          for i in {1..30}; do curl -s http://localhost:80 && break || sleep 2; done
+
+          # ---------- Ngrok (AFTER CADDY) ----------
           ngrok config add-authtoken "$NGROK_TOKEN"
-          ngrok http --domain="$NGROK_DOMAIN" 80 >/dev/null &
-          sleep 5
+          ngrok http --domain="$NGROK_DOMAIN" 80 > /dev/null &
 
       # =====================================================
-      # 6. BACKUP LOOP
+      # BACKUP LOOP
       # =====================================================
-      - name: Maintenance
+      - name: Backup Loop
         env:
           SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: |
-          for i in {1..20}; do
+          for i in {1..24}; do
             node smart_sync.js up || true
             sleep 900
           done

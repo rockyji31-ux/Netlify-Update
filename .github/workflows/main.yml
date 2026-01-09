@@ -1,4 +1,4 @@
-name: "Production v62 (Stable Trial Build)"
+name: "Production v63 (Final Stable Trial)"
 
 on:
   workflow_dispatch:
@@ -20,47 +20,40 @@ jobs:
       # =====================================================
       # 1. BASE TOOLS
       # =====================================================
-      - name: Install base tools
+      - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y curl sqlite3
           npm install @supabase/supabase-js
 
       # =====================================================
-      # 2. SMART SYNC SCRIPT (SUPABASE)
+      # 2. CREATE SMART SYNC
       # =====================================================
       - name: Create smart_sync.js
-        env:
-          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          N8N_ENCRYPTION_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
         run: |
           cat << 'EOF' > smart_sync.js
           const { createClient } = require('@supabase/supabase-js');
-          const fs = require('fs'); const crypto = require('crypto');
-          const { execSync, spawnSync } = require('child_process');
-
+          const fs = require('fs'), crypto = require('crypto'), { execSync } = require('child_process');
           const live='n8n_data/database.sqlite', safe='n8n_data/db_snap.sqlite';
           const sb = createClient('https://ymatdzammnejrmmiyygg.supabase.co', process.env.SUPABASE_SERVICE_ROLE);
 
-          function hash(p) { return fs.existsSync(p) ? crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex') : null; }
+          function hash(p){return fs.existsSync(p)?crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex'):null}
 
-          async function run(mode) {
-            try {
-              if(mode==='down') {
-                const { data, error } = await sb.storage.from('bot-storage').download('database.sqlite');
-                if(!error && data) fs.writeFileSync(live, Buffer.from(await data.arrayBuffer()));
+          async function run(m){
+            try{
+              if(m==='down'){
+                const {data}=await sb.storage.from('bot-storage').download('database.sqlite');
+                if(data) fs.writeFileSync(live,Buffer.from(await data.arrayBuffer()));
               } else {
                 if(!fs.existsSync(live)) return;
                 execSync(`sqlite3 ${live} ".backup '${safe}'"`);
                 execSync(`sqlite3 ${safe} "VACUUM;"`);
-                const h = hash(safe);
+                const h=hash(safe);
                 if(fs.existsSync('last_hash') && fs.readFileSync('last_hash','utf8')===h) return;
-                await sb.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(safe), { upsert:true });
-                fs.writeFileSync('last_hash', h);
+                await sb.storage.from('bot-storage').upload('database.sqlite',fs.readFileSync(safe),{upsert:true});
+                fs.writeFileSync('last_hash',h);
               }
-            } catch(e){ console.log("Sync:",e.message); }
+            }catch(e){console.log("Sync:",e.message)}
           }
           run(process.argv[2]);
           EOF
@@ -68,14 +61,16 @@ jobs:
       # =====================================================
       # 3. RESTORE n8n DB
       # =====================================================
-      - name: Restore n8n DB
+      - name: Restore DB
+        env:
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: |
           mkdir -p n8n_data
           node smart_sync.js down || true
           chmod -R 777 n8n_data
 
       # =====================================================
-      # 4. NGROK
+      # 4. START NGROK
       # =====================================================
       - name: Start Ngrok
         env:
@@ -90,7 +85,7 @@ jobs:
           sleep 5
 
       # =====================================================
-      # 5. DOCKER STACK
+      # 5. LAUNCH DOCKER STACK
       # =====================================================
       - name: Launch stack
         env:
@@ -100,35 +95,29 @@ jobs:
         run: |
           docker network create bot-net || true
 
-          # ---- AI SERVER (TEMP MEMORY) ----
           mkdir -p ai
           cat << 'EOF' > ai/ai_server.py
           from flask import Flask, request, jsonify
-          import g4f, time
+          import g4f,time
           from collections import defaultdict
           app=Flask(__name__)
-          MEM=defaultdict(list)
+          mem=defaultdict(list)
           @app.route('/chat',methods=['POST'])
           def chat():
             d=request.json or {}; u=d.get("user","g"); m=d.get("message","")
-            t=time.time(); MEM[u]=[x for x in MEM[u] if t-x["t"]<300]
-            MEM[u].append({"role":"user","content":m,"t":t}); MEM[u]=MEM[u][-5:]
-            try: r=g4f.ChatCompletion.create(model=g4f.models.gpt_4,messages=[{"role":x["role"],"content":x["content"]} for x in MEM[u]],timeout=15)
-            except: r="AI busy"
-            MEM[u].append({"role":"assistant","content":r,"t":t})
+            t=time.time(); mem[u]=[x for x in mem[u] if t-x["t"]<300]
+            mem[u].append({"role":"user","content":m,"t":t}); mem[u]=mem[u][-5:]
+            try:r=g4f.ChatCompletion.create(model=g4f.models.gpt_4,messages=[{"role":x["role"],"content":x["content"]} for x in mem[u]],timeout=15)
+            except:r="AI busy"
+            mem[u].append({"role":"assistant","content":r,"t":t})
             return jsonify({"response":r})
           app.run(host="0.0.0.0",port=5000)
           EOF
 
           docker run -d --name ai-server --network bot-net -v $(pwd)/ai:/app -w /app python:3.9-slim sh -c "apt-get update && apt-get install -y curl && pip install flask g4f curl_cffi && python ai_server.py"
 
-          # ---- n8n ----
-          docker run -d --name n8n --network bot-net -v $(pwd)/n8n_data:/home/node/.n8n \
-            -e N8N_ENCRYPTION_KEY="$N8N_ENCRYPTION_KEY" \
-            -e WEBHOOK_URL="https://$NGROK_DOMAIN" \
-            n8nio/n8n
+          docker run -d --name n8n --network bot-net -v $(pwd)/n8n_data:/home/node/.n8n -e N8N_ENCRYPTION_KEY="$N8N_ENCRYPTION_KEY" -e WEBHOOK_URL="https://$NGROK_DOMAIN" n8nio/n8n
 
-          # ---- CADDY ----
           cat << 'EOF' > Caddyfile
           :80 {
             rate_limit { zone global 30r/m }
@@ -143,6 +132,8 @@ jobs:
       # 6. PERIODIC BACKUP
       # =====================================================
       - name: Maintenance
+        env:
+          SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
         run: |
           for i in {1..20}; do
             node smart_sync.js up || true

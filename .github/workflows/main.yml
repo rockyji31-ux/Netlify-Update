@@ -1,4 +1,4 @@
-name: "Production v59 (Final Stable: Syntax Fix + Anti-Bloat)"
+name: "Production v60 (Final Stable: AI Curl Fix)"
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  run-v59-stable:
+  run-v60-final:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
@@ -80,13 +80,12 @@ jobs:
               } else {
                 if(!fs.existsSync(live)) return;
                 
-                // 🧹 VACUUM CLEANER LOGIC
                 try {
                    if(fs.existsSync(safe)) fs.unlinkSync(safe);
                    execSync("sqlite3 " + live + " \".backup '" + safe + "'\"");
-                   // Optimize size
+                   // Vacuum Optimization
                    execSync("sqlite3 " + safe + " 'VACUUM;'");
-                   console.log("🧹 DB Vacuumed (Size Reduced)");
+                   console.log("🧹 DB Vacuumed");
                 } catch(e) { console.log("Vacuum skipped: " + e.message); }
                 
                 const h = hash(safe);
@@ -125,7 +124,7 @@ jobs:
           sudo chmod -R 777 n8n_data
 
       # ==================================================================
-      # 5. LAUNCH SERVICES (SYNTAX ERROR FIXED HERE)
+      # 5. LAUNCH SERVICES (CURL FIX APPLIED)
       # ==================================================================
       - name: 🚀 Launch Services
         env:
@@ -138,7 +137,7 @@ jobs:
           ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > /dev/null &
           sleep 5
           
-          # AI Server Setup
+          # AI Server Script
           mkdir ai
           cat << 'EOF' > ai/ai_server.py
           import g4f, flask, logging
@@ -155,19 +154,22 @@ jobs:
           if __name__ == '__main__': app.run(host='0.0.0.0', port=5000)
           EOF
 
-          docker run -d --name ai-server --network bot-net -v $(pwd)/ai:/app -w /app python:3.9-slim sh -c "pip install flask g4f curl_cffi && while true; do python ai_server.py; sleep 2; done"
+          # 🛑 FIX: Install 'curl' and 'build-essential' inside the container
+          docker run -d --name ai-server --network bot-net \
+            -v $(pwd)/ai:/app -w /app \
+            python:3.9-slim sh -c "apt-get update && apt-get install -y curl build-essential && pip install flask g4f curl_cffi && while true; do python ai_server.py; echo '⚠️ AI Crashed'; sleep 2; done"
 
-          # 🛑 FIX APPLIED HERE: Initialize RETRIES
+          # Wait for AI (Increased retries to 30)
           echo "⏳ Waiting for AI Server..."
           RETRIES=0
-          until docker exec ai-server curl -s http://localhost:5000/chat > /dev/null 2>&1 || [ $RETRIES -eq 20 ]; do 
-            echo "Waiting for AI dependencies..."
+          until docker exec ai-server curl -s http://localhost:5000/chat > /dev/null 2>&1 || [ $RETRIES -eq 30 ]; do 
+            echo "Waiting for AI dependencies... (Try $RETRIES/30)"
             sleep 10
             RETRIES=$((RETRIES+1))
           done
           echo "✅ AI Server is Ready!"
 
-          # n8n (Anti-Bloat Config)
+          # n8n (Anti-Bloat)
           docker run -d --name n8n --network bot-net \
             -v $(pwd)/n8n_data:/home/node/.n8n \
             -e N8N_ENCRYPTION_KEY="${{ secrets.N8N_ENCRYPTION_KEY }}" \
@@ -217,16 +219,16 @@ jobs:
           EOF
 
           # Dashboard & Caddy
-          echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="30"><title>Status</title></head><body style="background:#000;color:#0f0;text-align:center;padding:50px;"><h1>🚀 v59 Active</h1><a href="/workflow" style="color:#fff">Open n8n</a></body></html>' > public/index.html
+          echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="30"><title>Status</title></head><body style="background:#000;color:#0f0;text-align:center;padding:50px;"><h1>🚀 v60 Active</h1><a href="/workflow" style="color:#fff">Open n8n</a></body></html>' > public/index.html
           printf ":80 {\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n reverse_proxy /send wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n  try_files {path} /index.html\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
 
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile -v $(pwd)/public:/srv/public caddy:latest
           docker run -d --name wa-bot --network bot-net -v $(pwd)/whatsapp:/app -w /app -e MONGODB_URI="${{ secrets.MONGODB_URI }}" node:20-alpine sh -c "apk add --no-cache git && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
-          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>n8n Online (v59 Stable)</b>" -d parse_mode="HTML"
+          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>n8n Online (v60)</b>" -d parse_mode="HTML"
 
       # ==================================================================
-      # 6. FAST HANDOVER LOOP (5h 55m)
+      # 6. LOOP
       # ==================================================================
       - name: 🔄 Maintenance Loop
         env:
@@ -254,9 +256,6 @@ jobs:
              sleep 900
           done
 
-      # ==================================================================
-      # 7. FAILURE ALERT
-      # ==================================================================
       - name: 🚨 Notify Failure
         if: failure()
         env:

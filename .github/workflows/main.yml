@@ -3,7 +3,7 @@ name: "Production v60 (Final Stable: AI Curl Fix)"
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: '0 */6 * * *'
 
 concurrency:
   group: "production-bot"
@@ -13,120 +13,253 @@ jobs:
   run-v60-final:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-
+    
     steps:
-    - uses: actions/checkout@v3
+      - name: Checkout Code
+        uses: actions/checkout@v3
 
-    # =========================================================
-    # 1. SYSTEM + NGROK (UBUNTU 24 SAFE)
-    # =========================================================
-    - name: Install tools
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y curl sqlite3 docker.io
-        sudo systemctl start docker
+      # ==================================================================
+      # 1. OPTIMIZATION & TOOLS
+      # ==================================================================
+      - name: ⚡ Tune System & Install Tools
+        run: |
+          sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+          sudo sysctl -w net.core.default_qdisc=fq && sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
+          
+          # Install Dependencies
+          sudo apt-get update && sudo apt-get install -y sqlite3 curl
+          
+          # Install Ngrok
+          curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+          echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+          sudo apt-get update && sudo apt-get install -y ngrok
+          
+          npm install @supabase/supabase-js
+          echo "✅ System Ready"
 
-        # Install ngrok (NO APT REPO — Ubuntu 24 safe)
-        curl -L https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz -o ngrok.tgz
-        tar -xzf ngrok.tgz
-        sudo mv ngrok /usr/local/bin/ngrok
-        sudo chmod +x /usr/local/bin/ngrok
+      # ==================================================================
+      # 2. CACHING
+      # ==================================================================
+      - name: 📦 Cache Community Nodes
+        id: node-cache
+        uses: actions/cache@v3
+        with:
+          path: n8n_data/nodes
+          key: n8n-nodes-v1-${{ runner.os }}
 
-        npm install @supabase/supabase-js
+      # ==================================================================
+      # 3. SMART SYNC (WITH VACUUM CLEANER)
+      # ==================================================================
+      - name: 💾 Setup Data & Sync Logic
+        env:
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          N8N_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
+        run: |
+          mkdir -p n8n_data/nodes
+          
+          # --- SMART SYNC SCRIPT ---
+          cat << 'EOF' > smart_sync.js
+          const { createClient } = require('@supabase/supabase-js');
+          const fs = require('fs'); const crypto = require('crypto'); 
+          const { execSync, spawnSync } = require('child_process');
+          
+          const live='n8n_data/database.sqlite', safe='n8n_data/db_snap.sqlite';
+          const sb = createClient('https://ymatdzammnejrmmiyygg.supabase.co', process.env.SUPABASE_KEY);
+          
+          function hash(p) { return fs.existsSync(p) ? crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex') : null; }
+          
+          async function run(mode) {
+            try {
+              if(mode==='down') {
+                console.log("📥 Downloading from Supabase...");
+                const { data, error } = await sb.storage.from('bot-storage').download('database.sqlite');
+                if(!error) { fs.writeFileSync(live, Buffer.from(await data.arrayBuffer())); console.log("✅ Restored Hash: " + hash(live)); }
+                else console.log("⚠️ Fresh Start (No Backup)");
+              } else {
+                if(!fs.existsSync(live)) return;
+                
+                try {
+                   if(fs.existsSync(safe)) fs.unlinkSync(safe);
+                   execSync("sqlite3 " + live + " \".backup '" + safe + "'\"");
+                   // Vacuum Optimization
+                   execSync("sqlite3 " + safe + " 'VACUUM;'");
+                   console.log("🧹 DB Vacuumed");
+                } catch(e) { console.log("Vacuum skipped: " + e.message); }
+                
+                const h = hash(safe);
+                if(fs.existsSync('last_hash') && fs.readFileSync('last_hash','utf8') === h) { console.log("💤 No Changes"); return; }
+                
+                console.log("📤 Changes Detected! Uploading...");
+                const { error } = await sb.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(safe), { upsert: true });
+                
+                if(!error) { 
+                   fs.writeFileSync('last_hash', h); 
+                   console.log("✅ Supabase Sync Complete");
+                   
+                   try {
+                     const caption = "💾 <b>Backup Saved (Optimized)</b>\n📅 Time: " + new Date().toISOString() + "\n🔑 Key: <code>" + process.env.N8N_KEY + "</code>";
+                     const args = ["-s", "-F", "chat_id=" + process.env.TG_ID, "-F", "document=@" + safe + ";filename=database.sqlite", "-F", "caption=" + caption, "-F", "parse_mode=HTML", "https://api.telegram.org/bot" + process.env.TG_TOKEN + "/sendDocument"];
+                     spawnSync("curl", args);
+                     console.log("✈️ Sent to Telegram");
+                   } catch(err) { console.error("Telegram Error:", err.message); }
+                }
+              }
+            } catch(e) { console.error("Sync Error:", e.message); }
+          }
+          run(process.argv[2]);
+          EOF
+          
+          node smart_sync.js down
+          sudo chmod -R 777 n8n_data
 
-    # =========================================================
-    # 2. RESTORE N8N FROM SUPABASE
-    # =========================================================
-    - name: Restore n8n
-      env:
-        SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      run: |
-        mkdir -p n8n_data
-        node <<'EOF'
-        const {createClient}=require('@supabase/supabase-js')
-        const fs=require('fs')
-        const sb=createClient('https://ymatdzammnejrmmiyygg.supabase.co',process.env.SUPABASE_SERVICE_ROLE)
-        sb.storage.from('bot-storage').download('database.sqlite').then(r=>{
-          if(!r.error) fs.writeFileSync('n8n_data/database.sqlite',Buffer.from(r.data.arrayBuffer()))
-        })
-        EOF
+      # ==================================================================
+      # 4. INSTALL NODES
+      # ==================================================================
+      - name: 📥 Install Nodes
+        if: steps.node-cache.outputs.cache-hit != 'true'
+        run: |
+          cd n8n_data/nodes && npm init -y && npm install n8n-nodes-datastore n8n-nodes-run-node-with-credentials-x n8n-nodes-tesseractjs && cd ../..
+          sudo chmod -R 777 n8n_data
 
-    # =========================================================
-    # 3. START STACK (SAFE ORDER)
-    # =========================================================
-    - name: Start stack
-      env:
-        NGROK_TOKEN: ${{ secrets.NGROK_TOKEN }}
-        NGROK_DOMAIN: ${{ secrets.NGROK_DOMAIN }}
-        MONGODB_URI: ${{ secrets.MONGODB_URI }}
-        N8N_ENCRYPTION_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
-      run: |
-        docker network create bot-net || true
+      # ==================================================================
+      # 5. LAUNCH SERVICES (CURL FIX APPLIED)
+      # ==================================================================
+      - name: 🚀 Launch Services
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          URL: ${{ secrets.NGROK_DOMAIN }}
+        run: |
+          docker network create bot-net
+          ngrok config add-authtoken ${{ secrets.NGROK_TOKEN }}
+          ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > /dev/null &
+          sleep 5
+          
+          # AI Server Script
+          mkdir ai
+          cat << 'EOF' > ai/ai_server.py
+          import g4f, flask, logging
+          app = flask.Flask(__name__)
+          log = logging.getLogger('werkzeug'); log.setLevel(logging.ERROR)
+          @app.route('/chat', methods=['POST'])
+          def chat():
+              try:
+                  msg = flask.request.json.get('message')
+                  if not msg: return flask.jsonify({'error': 'No message'}), 400
+                  response = g4f.ChatCompletion.create(model=g4f.models.gpt_4, messages=[{'role': 'user', 'content': msg}])
+                  return flask.jsonify({'response': response})
+              except Exception as e: return flask.jsonify({'error': str(e)}), 500
+          if __name__ == '__main__': app.run(host='0.0.0.0', port=5000)
+          EOF
 
-        # ---- AI SERVER ----
-        docker run -d --name ai-server --network bot-net python:3.9-slim sh -c "
-        pip install flask g4f curl_cffi &&
-        python - <<'EOF'
-        from flask import Flask,request,jsonify
-        import g4f
-        app=Flask(__name__)
-        @app.route('/health')
-        def h(): return 'ok'
-        @app.route('/chat',methods=['POST'])
-        def c():
-          m=request.json.get('message')
-          r=g4f.ChatCompletion.create(model=g4f.models.gpt_4,messages=[{'role':'user','content':m}])
-          return jsonify({'response':r})
-        app.run('0.0.0.0',5000)
-        EOF"
+          # 🛑 FIX: Install 'curl' and 'build-essential' inside the container
+          docker run -d --name ai-server --network bot-net \
+            -v $(pwd)/ai:/app -w /app \
+            python:3.9-slim sh -c "apt-get update && apt-get install -y curl build-essential && pip install flask g4f curl_cffi && while true; do python ai_server.py; echo '⚠️ AI Crashed'; sleep 2; done"
 
-        until docker exec ai-server curl -s http://localhost:5000/health; do sleep 5; done
+          # Wait for AI (Increased retries to 30)
+          echo "⏳ Waiting for AI Server..."
+          RETRIES=0
+          until docker exec ai-server curl -s http://localhost:5000/chat > /dev/null 2>&1 || [ $RETRIES -eq 30 ]; do 
+            echo "Waiting for AI dependencies... (Try $RETRIES/30)"
+            sleep 10
+            RETRIES=$((RETRIES+1))
+          done
+          echo "✅ AI Server is Ready!"
 
-        # ---- N8N ----
-        docker run -d --name n8n --network bot-net \
-        -v $(pwd)/n8n_data:/home/node/.n8n \
-        -e N8N_ENCRYPTION_KEY=$N8N_ENCRYPTION_KEY \
-        -e WEBHOOK_URL=https://$NGROK_DOMAIN \
-        n8nio/n8n
+          # n8n (Anti-Bloat)
+          docker run -d --name n8n --network bot-net \
+            -v $(pwd)/n8n_data:/home/node/.n8n \
+            -e N8N_ENCRYPTION_KEY="${{ secrets.N8N_ENCRYPTION_KEY }}" \
+            -e N8N_SECURE_COOKIE=false \
+            -e WEBHOOK_URL="https://${{ secrets.NGROK_DOMAIN }}" \
+            -e DB_SQLITE_VACUUM_ON_STARTUP=true \
+            -e EXECUTIONS_DATA_PRUNE=true \
+            -e EXECUTIONS_DATA_MAX_AGE=24 \
+            -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
+            -e EXECUTIONS_DATA_SAVE_ON_ERROR=all \
+            -e EXECUTIONS_DATA_SAVE_ON_PROGRESS=false \
+            n8nio/n8n
 
-        # ---- WHATSAPP ----
-        docker run -d --name wa-bot --network bot-net \
-        -e MONGODB_URI=$MONGODB_URI \
-        ghcr.io/whiskeysockets/baileys
+          # WhatsApp & Caddy
+          mkdir whatsapp public
+          echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
+          
+          cat << 'EOF' > whatsapp/index.js
+          const { default: makeWASocket, DisconnectReason, BufferJSON, useMultiFileAuthState, makeCacheableSignalKeyStore } = require('@whiskeysockets/baileys');
+          const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino');
+          const app = express(); app.use(express.json());
+          const PORT = 10000; const N8N_URL = "http://n8n:5678/webhook/whatsapp"; const MONGO_URL = process.env.MONGODB_URI;
+          const COLLECTION_NAME = 'Auth_Final_v1'; 
+          const authSchema = new mongoose.Schema({ _id: String, data: Object }); const AuthModel = mongoose.model(COLLECTION_NAME, authSchema);
+          async function useMongoDB() {
+              const writeData = async (data, id) => { try { await AuthModel.findOneAndUpdate({ _id: id }, { data: JSON.parse(JSON.stringify(data, BufferJSON.replacer)), _id: id }, { upsert: true }); } catch (err) {} };
+              const readData = async (id) => { try { const doc = await AuthModel.findById(id); return doc ? JSON.parse(JSON.stringify(doc.data), BufferJSON.reviver) : null; } catch (err) { return null; } };
+              const removeData = async (id) => { try { await AuthModel.findByIdAndDelete(id); } catch (err) {} };
+              const creds = (await readData('creds')) || (await (require('@whiskeysockets/baileys').initAuthCreds)());
+              return { state: { creds, keys: { get: async (t, i) => { const d = {}; await Promise.all(i.map(async id => { let v = await readData(`${t}-${id}`); if (t === 'app-state-sync-key' && v) v = require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(v); if (v) d[id] = v; })); return d; }, set: async (d) => { const t = []; for (const c in d) for (const i in d[c]) { const v = d[c][i], k = `${c}-${i}`; t.push(v ? writeData(v, k) : removeData(k)); } await Promise.all(t); } } }, saveCreds: () => writeData(creds, 'creds'), clear: async () => { await AuthModel.deleteMany({}); } };
+          }
+          let sock; let qrData = null;
+          async function start() {
+              try {
+                  if(mongoose.connection.readyState === 0) await mongoose.connect(MONGO_URL);
+                  const { state, saveCreds, clear } = await useMongoDB(); global.clear = clear;
+                  sock = makeWASocket({ auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) }, logger: pino({ level: 'silent' }), printQRInTerminal: false, browser: ["Shiksha AI", "Chrome", "1.0.0"], connectTimeoutMs: 60000 });
+                  sock.ev.on('creds.update', saveCreds);
+                  sock.ev.on('connection.update', async (u) => { const { connection, lastDisconnect, qr } = u; if(qr) qrData = qr; if(connection === 'open') { qrData = null; console.log("✅ Connected"); } if(connection === 'close') { const code = lastDisconnect.error?.output?.statusCode; if(code === DisconnectReason.loggedOut) { await clear(); process.exit(1); } else { setTimeout(start, 3000); } } });
+                  sock.ev.on('messages.upsert', async ({ messages }) => { const msg = messages[0]; if(!msg.message || msg.key.fromMe) return; try { const realNumber = (msg.key.participant || msg.key.remoteJid).split('@')[0]; await axios.post(N8N_URL, { from: realNumber, text: msg.message.conversation || msg.message.extendedTextMessage?.text, name: msg.pushName, full_json: msg }); } catch (e) {} });
+              } catch (e) { setTimeout(start, 5000); }
+          }
+          app.post('/send', async (req, res) => { try { if (!sock) return res.status(503).json({ error: "Start" }); const { number, message } = req.body; const fullId = number.includes('@') ? number : `${number}@s.whatsapp.net`; await sock.sendMessage(fullId, { text: message }); res.json({ status: true }); } catch (e) { res.status(500).json({ error: e.message }); } });
+          app.get('/qr', async (req, res) => { if(sock?.user && !qrData) return res.send('<h1>✅ Connected</h1><a href="/reset">Reset</a>'); if(!qrData) return res.send('<h1>⏳ Generating...</h1>'); const url = await QRCode.toDataURL(qrData); res.send(`<div style="text-align:center"><h1>Scan QR</h1><img src="${url}" /><br/><a href="/reset">Reset DB</a></div>`); });
+          app.get('/reset', async (req, res) => { if(global.clear) await global.clear(); res.send("<h1>Wiped. Restarting...</h1>"); process.exit(1); });
+          app.listen(PORT, () => { console.log(`Bot on ${PORT}`); start(); });
+          EOF
 
-        # ---- CADDY ----
-        docker run -d --name caddy --network bot-net -p 80:80 caddy
+          # Dashboard & Caddy
+          echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="30"><title>Status</title></head><body style="background:#000;color:#0f0;text-align:center;padding:50px;"><h1>🚀 v60 Active</h1><a href="/workflow" style="color:#fff">Open n8n</a></body></html>' > public/index.html
+          printf ":80 {\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n reverse_proxy /send wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n  try_files {path} /index.html\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
 
-        # Wait until port 80 is live (prevents ERR_NGROK_8012)
-        until curl -s http://localhost:80 >/dev/null; do sleep 3; done
+          docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile -v $(pwd)/public:/srv/public caddy:latest
+          docker run -d --name wa-bot --network bot-net -v $(pwd)/whatsapp:/app -w /app -e MONGODB_URI="${{ secrets.MONGODB_URI }}" node:20-alpine sh -c "apk add --no-cache git && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
-        # ---- NGROK ----
-        ngrok config add-authtoken $NGROK_TOKEN
-        ngrok http --domain=$NGROK_DOMAIN 80 > /dev/null &
+          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>n8n Online (v60)</b>" -d parse_mode="HTML"
 
-    # =========================================================
-    # 4. 6-HOUR SUPERVISOR + HANDOFF
-    # =========================================================
-    - name: Supervisor
-      env:
-        GH_TOKEN: ${{ secrets.GH_PAT }}
-        SUPABASE_SERVICE_ROLE: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-      run: |
-        START=$(date +%s)
-
-        for i in {1..120}; do
-          sleep 180
-
-          # restart crashed containers
-          for c in ai-server n8n wa-bot caddy; do
-            if ! docker ps | grep -q $c; then docker restart $c; fi
+      # ==================================================================
+      # 6. LOOP
+      # ==================================================================
+      - name: 🔄 Maintenance Loop
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          N8N_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
+        run: |
+          START=$(date +%s); TRIGGERED=false
+          while true; do
+             NOW=$(date +%s); DIFF=$((NOW - START))
+             
+             if [ $DIFF -ge 21300 ] && [ "$TRIGGERED" = false ]; then
+                 echo "💾 Final Backup & Handover..."
+                 node smart_sync.js up
+                 echo "🔫 TRIGGERING NEXT RUNNER..."
+                 gh workflow run main.yml
+                 TRIGGERED=true
+                 sleep 300
+             fi
+             
+             if ! docker ps | grep -q n8n; then docker restart n8n; fi
+             node smart_sync.js up
+             sleep 900
           done
 
-          # handoff at 5h55m
-          NOW=$(date +%s)
-          if [ $((NOW - START)) -gt 21300 ]; then
-            gh workflow run main.yml
-            sleep 600
-            exit 0
-          fi
-        done
+      - name: 🚨 Notify Failure
+        if: failure()
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+           curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="⚠️ <b>CRITICAL: Workflow Failed!</b>" -d parse_mode="HTML"

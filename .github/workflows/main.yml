@@ -1,4 +1,4 @@
-name: "Production v56 (Final Fix: spawnSync Logic)"
+name: "Production v58 (Anti-Bloat & Auto-Vacuum)"
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  run-v56-bulletproof:
+  run-v58-optimized:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
@@ -29,7 +29,7 @@ jobs:
           # Install Dependencies
           sudo apt-get update && sudo apt-get install -y sqlite3 curl
           
-          # Install Ngrok (Official)
+          # Install Ngrok
           curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
           echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
           sudo apt-get update && sudo apt-get install -y ngrok
@@ -48,7 +48,7 @@ jobs:
           key: n8n-nodes-v1-${{ runner.os }}
 
       # ==================================================================
-      # 3. SMART SYNC (SPAWNSYNC FIX)
+      # 3. SMART SYNC (WITH VACUUM CLEANER)
       # ==================================================================
       - name: 💾 Setup Data & Sync Logic
         env:
@@ -59,7 +59,7 @@ jobs:
         run: |
           mkdir -p n8n_data/nodes
           
-          # --- SMART SYNC SCRIPT (Using spawnSync to fix Shell Errors) ---
+          # --- SMART SYNC SCRIPT ---
           cat << 'EOF' > smart_sync.js
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs'); const crypto = require('crypto'); 
@@ -80,8 +80,16 @@ jobs:
               } else {
                 if(!fs.existsSync(live)) return;
                 
-                try { if(fs.existsSync(safe)) fs.unlinkSync(safe); execSync("sqlite3 " + live + " \".backup '" + safe + "'\""); } 
-                catch(e) { fs.copyFileSync(live, safe); }
+                // 🧹 VACUUM CLEANER LOGIC (Shrinks DB before checking)
+                try {
+                   // Create backup first
+                   if(fs.existsSync(safe)) fs.unlinkSync(safe);
+                   execSync("sqlite3 " + live + " \".backup '" + safe + "'\"");
+                   
+                   // Vacuum the SAFE copy (Not live, to avoid locking n8n)
+                   execSync("sqlite3 " + safe + " 'VACUUM;'");
+                   console.log("🧹 DB Vacuumed (Size Reduced)");
+                } catch(e) { console.log("Vacuum skipped: " + e.message); }
                 
                 const h = hash(safe);
                 if(fs.existsSync('last_hash') && fs.readFileSync('last_hash','utf8') === h) { console.log("💤 No Changes"); return; }
@@ -93,25 +101,11 @@ jobs:
                    fs.writeFileSync('last_hash', h); 
                    console.log("✅ Supabase Sync Complete");
                    
-                   // TELEGRAM BACKUP (spawnSync Fix)
                    try {
-                     const caption = "💾 <b>Backup Saved</b>\n📅 Time: " + new Date().toISOString() + "\n🔑 Key: <code>" + process.env.N8N_KEY + "</code>";
-                     
-                     // We pass arguments as an Array. No shell interpretation = No crashes.
-                     const args = [
-                        "-s",
-                        "-F", "chat_id=" + process.env.TG_ID,
-                        "-F", "document=@" + safe + ";filename=database.sqlite",
-                        "-F", "caption=" + caption,
-                        "-F", "parse_mode=HTML",
-                        "https://api.telegram.org/bot" + process.env.TG_TOKEN + "/sendDocument"
-                     ];
-
-                     const result = spawnSync("curl", args);
-                     
-                     if(result.error) { console.error("Spawn Error:", result.error); }
-                     else { console.log("✈️ Sent to Telegram (Safe Mode)"); }
-                     
+                     const caption = "💾 <b>Backup Saved (Optimized)</b>\n📅 Time: " + new Date().toISOString() + "\n🔑 Key: <code>" + process.env.N8N_KEY + "</code>";
+                     const args = ["-s", "-F", "chat_id=" + process.env.TG_ID, "-F", "document=@" + safe + ";filename=database.sqlite", "-F", "caption=" + caption, "-F", "parse_mode=HTML", "https://api.telegram.org/bot" + process.env.TG_TOKEN + "/sendDocument"];
+                     spawnSync("curl", args);
+                     console.log("✈️ Sent to Telegram");
                    } catch(err) { console.error("Telegram Error:", err.message); }
                 }
               }
@@ -126,15 +120,14 @@ jobs:
       # ==================================================================
       # 4. INSTALL NODES
       # ==================================================================
-      - name: 📥 Install Nodes (If not cached)
+      - name: 📥 Install Nodes
         if: steps.node-cache.outputs.cache-hit != 'true'
         run: |
-          echo "⚠️ Cache Miss! Installing nodes..."
           cd n8n_data/nodes && npm init -y && npm install n8n-nodes-datastore n8n-nodes-run-node-with-credentials-x n8n-nodes-tesseractjs && cd ../..
           sudo chmod -R 777 n8n_data
 
       # ==================================================================
-      # 5. START SERVICES
+      # 5. LAUNCH SERVICES (LOGGING DISABLED)
       # ==================================================================
       - name: 🚀 Launch Services
         env:
@@ -142,29 +135,45 @@ jobs:
           TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           URL: ${{ secrets.NGROK_DOMAIN }}
         run: |
-          # Start Tunnel
+          docker network create bot-net
           ngrok config add-authtoken ${{ secrets.NGROK_TOKEN }}
           ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > /dev/null &
           sleep 5
           
-          # SEND START ALERT
-          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>n8n is Online!</b>%0A🔗 URL: https://$URL" -d parse_mode="HTML"
-          
-          docker network create bot-net
+          # AI Server Setup
+          mkdir ai
+          cat << 'EOF' > ai/ai_server.py
+          import g4f, flask, logging
+          app = flask.Flask(__name__)
+          log = logging.getLogger('werkzeug'); log.setLevel(logging.ERROR)
+          @app.route('/chat', methods=['POST'])
+          def chat():
+              try:
+                  msg = flask.request.json.get('message')
+                  if not msg: return flask.jsonify({'error': 'No message'}), 400
+                  response = g4f.ChatCompletion.create(model=g4f.models.gpt_4, messages=[{'role': 'user', 'content': msg}])
+                  return flask.jsonify({'response': response})
+              except Exception as e: return flask.jsonify({'error': str(e)}), 500
+          if __name__ == '__main__': app.run(host='0.0.0.0', port=5000)
+          EOF
 
-          # AI Server
-          mkdir ai && echo "import g4f,flask;app=flask.Flask(__name__);@app.route('/chat',methods=['POST'])" > ai/ai_server.py
-          echo "def c():try:return flask.jsonify({'response':g4f.ChatCompletion.create(model=g4f.models.gpt_4,messages=[{'role':'user','content':flask.request.json.get('message')}])}) " >> ai/ai_server.py
-          echo "except Exception as e:return flask.jsonify({'error':str(e)}),500" >> ai/ai_server.py
-          echo "if __name__=='__main__':app.run(host='0.0.0.0',port=5000)" >> ai/ai_server.py
-          docker run -d --name ai-server --network bot-net -v $(pwd)/ai:/app -w /app python:3.9-slim sh -c "pip install flask g4f curl_cffi && python ai_server.py"
+          docker run -d --name ai-server --network bot-net -v $(pwd)/ai:/app -w /app python:3.9-slim sh -c "pip install flask g4f curl_cffi && while true; do python ai_server.py; sleep 2; done"
 
-          # n8n
+          # Wait for AI
+          until docker exec ai-server curl -s http://localhost:5000/chat > /dev/null 2>&1 || [ $RETRIES -eq 20 ]; do sleep 10; RETRIES=$((RETRIES+1)); done
+
+          # n8n (NO BLOAT CONFIGURATION) 🛑
           docker run -d --name n8n --network bot-net \
             -v $(pwd)/n8n_data:/home/node/.n8n \
             -e N8N_ENCRYPTION_KEY="${{ secrets.N8N_ENCRYPTION_KEY }}" \
             -e N8N_SECURE_COOKIE=false \
             -e WEBHOOK_URL="https://${{ secrets.NGROK_DOMAIN }}" \
+            -e DB_SQLITE_VACUUM_ON_STARTUP=true \
+            -e EXECUTIONS_DATA_PRUNE=true \
+            -e EXECUTIONS_DATA_MAX_AGE=24 \
+            -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
+            -e EXECUTIONS_DATA_SAVE_ON_ERROR=all \
+            -e EXECUTIONS_DATA_SAVE_ON_PROGRESS=false \
             n8nio/n8n
 
           # WhatsApp & Caddy
@@ -203,11 +212,13 @@ jobs:
           EOF
 
           # Dashboard & Caddy
-          echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="30"><title>Status</title></head><body style="background:#000;color:#0f0;text-align:center;padding:50px;"><h1>🚀 v56 Active</h1><a href="/workflow" style="color:#fff">Open n8n</a></body></html>' > public/index.html
+          echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="30"><title>Status</title></head><body style="background:#000;color:#0f0;text-align:center;padding:50px;"><h1>🚀 v58 Active</h1><a href="/workflow" style="color:#fff">Open n8n</a></body></html>' > public/index.html
           printf ":80 {\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n reverse_proxy /send wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n  try_files {path} /index.html\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
 
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile -v $(pwd)/public:/srv/public caddy:latest
           docker run -d --name wa-bot --network bot-net -v $(pwd)/whatsapp:/app -w /app -e MONGODB_URI="${{ secrets.MONGODB_URI }}" node:20-alpine sh -c "apk add --no-cache git && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
+
+          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>n8n Online (Anti-Bloat v58)</b>" -d parse_mode="HTML"
 
       # ==================================================================
       # 6. FAST HANDOVER LOOP (5h 55m)
@@ -218,7 +229,6 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # Need Key here too for manual triggers/backup calls inside loop
           N8N_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
         run: |
           START=$(date +%s); TRIGGERED=false
@@ -248,4 +258,4 @@ jobs:
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-           curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="⚠️ <b>CRITICAL: Workflow Failed!</b>%0APlease check GitHub Actions immediately." -d parse_mode="HTML"
+           curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="⚠️ <b>CRITICAL: Workflow Failed!</b>" -d parse_mode="HTML"

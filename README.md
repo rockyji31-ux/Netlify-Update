@@ -20,7 +20,7 @@ Before touching the code, create these 5 free accounts and save their details.
 
 ### 1. GitHub (The Host)
 * Create a new account at [github.com](https://github.com).
-* Create a **New Private Repository** (e.g., `my-wa-bot`).
+* Create a **New Public Repository** (e.g., `my-wa-bot`).
 
 ### 2. Ngrok (The Tunnel)
 * Sign up at [ngrok.com](https://ngrok.com).

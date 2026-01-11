@@ -1,4 +1,4 @@
-name: "Production v66 (Future Proof: Logs + Media + Isolation)"
+name: "Production v68 (Hybrid: Robust Sync + Health Checks)"
 
 on:
   workflow_dispatch:
@@ -10,25 +10,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  run-v66-observer:
+  run-v68-hybrid:
     runs-on: ubuntu-latest
-    timeout-minutes: 360 # 6 Hours Guarantee
+    timeout-minutes: 360 # 6 Hours Limit
     
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
       # ==================================================================
-      # 1. SYSTEM TUNING (Geeky Optimization)
+      # 1. SYSTEM TUNING
       # ==================================================================
-      - name: ⚡ Tune Kernel & Tools
+      - name: ⚡ Optimize Environment
         run: |
-          # 4GB Swap for Stability
+          # 4GB Swap (Prevent OOM Kills)
           sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
-          # Network Optimization (BBR Algorithm)
+          # Network Tuning for WebSocket Stability
           sudo sysctl -w net.core.default_qdisc=fq && sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
           
-          # Install Dependencies (FFmpeg for WhatsApp Video)
+          # Install Critical Deps
           sudo apt-get update && sudo apt-get install -y sqlite3 curl ffmpeg
           
           # Install Ngrok
@@ -37,64 +37,74 @@ jobs:
           sudo apt-get update && sudo apt-get install -y ngrok
           
           npm install @supabase/supabase-js
-          echo "✅ System Hardware Optimized"
+          echo "✅ System Tuned"
 
       # ==================================================================
-      # 2. CACHING
+      # 2. CACHING (Speed Up Restarts)
       # ==================================================================
-      - name: 📦 Cache Community Nodes
-        id: node-cache
+      - name: 📦 Cache Modules
         uses: actions/cache@v3
         with:
-          path: n8n_data/nodes
-          key: n8n-nodes-v1-${{ runner.os }}
+          path: |
+            n8n_data/nodes
+            whatsapp/node_modules
+          key: bot-deps-v1-${{ runner.os }}
 
       # ==================================================================
-      # 3. SMART SYNC
+      # 3. ROBUST DATA SYNC (Groq Suggestion: Add Retries)
       # ==================================================================
-      - name: 💾 Setup Data Persistence
+      - name: 💾 Setup Data Layer
         env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          N8N_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
         run: |
-          mkdir -p n8n_data/nodes
+          mkdir -p n8n_data/nodes whatsapp
           
           cat << 'EOF' > smart_sync.js
           const { createClient } = require('@supabase/supabase-js');
-          const fs = require('fs'); const crypto = require('crypto'); 
-          const { execSync, spawnSync } = require('child_process');
-          
-          const live='n8n_data/database.sqlite', safe='n8n_data/db_snap.sqlite';
+          const fs = require('fs'); const { execSync } = require('child_process');
           const sb = createClient('https://ymatdzammnejrmmiyygg.supabase.co', process.env.SUPABASE_KEY);
-          
-          function hash(p) { return fs.existsSync(p) ? crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex') : null; }
-          
+          const live='n8n_data/database.sqlite', safe='n8n_data/db_snap.sqlite';
+
+          // Retry Logic Wrapper
+          async function retry(fn, retries = 3) {
+            for (let i = 0; i < retries; i++) {
+              try { await fn(); return; } catch (err) {
+                console.error(`Attempt ${i+1} failed: ${err.message}`);
+                if (i === retries - 1) throw err;
+                await new Promise(r => setTimeout(r, 2000));
+              }
+            }
+          }
+
           async function run(mode) {
             try {
               if(mode==='down') {
-                console.log("📥 Downloading Database...");
-                const { data, error } = await sb.storage.from('bot-storage').download('database.sqlite');
-                if(!error) { fs.writeFileSync(live, Buffer.from(await data.arrayBuffer())); console.log("✅ Restored Hash: " + hash(live)); }
-                else console.log("⚠️ No Backup Found (Starting Fresh)");
+                console.log("📥 Downloading...");
+                await retry(async () => {
+                   const { data, error } = await sb.storage.from('bot-storage').download('database.sqlite');
+                   if(error) throw error;
+                   fs.writeFileSync(live, Buffer.from(await data.arrayBuffer()));
+                   // Enable WAL Mode for SQLite Stability
+                   try { execSync("sqlite3 " + live + " 'PRAGMA journal_mode=WAL;'"); } catch(e) {}
+                });
+                console.log("✅ Download Success");
               } else {
                 if(!fs.existsSync(live)) return;
-                try {
-                   // Safe Backup & Vacuum
-                   if(fs.existsSync(safe)) fs.unlinkSync(safe);
-                   execSync("sqlite3 " + live + " \".backup '" + safe + "'\"");
-                   execSync("sqlite3 " + safe + " 'VACUUM;'");
-                } catch(e) {}
+                // Atomic Backup
+                if(fs.existsSync(safe)) fs.unlinkSync(safe);
+                execSync("sqlite3 " + live + " \".backup '" + safe + "'\"");
+                execSync("sqlite3 " + safe + " 'VACUUM;'"); // Shrink DB
                 
-                const h = hash(safe);
-                if(fs.existsSync('last_hash') && fs.readFileSync('last_hash','utf8') === h) { console.log("💤 No DB Changes"); return; }
-                
-                console.log("📤 Uploading New Data...");
-                const { error } = await sb.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(safe), { upsert: true });
-                if(!error) { fs.writeFileSync('last_hash', h); }
+                console.log("📤 Uploading...");
+                await retry(async () => {
+                   const { error } = await sb.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(safe), { upsert: true });
+                   if(error) throw error;
+                });
+                console.log("✅ Upload Success");
               }
-            } catch(e) { console.error("Sync Error:", e.message); }
+            } catch(e) { console.error("❌ Sync Fatal Error:", e.message); }
           }
           run(process.argv[2]);
           EOF
@@ -103,7 +113,7 @@ jobs:
           sudo chmod -R 777 n8n_data
 
       # ==================================================================
-      # 4. INSTALL NODES
+      # 4. INSTALL & CONFIGURE
       # ==================================================================
       - name: 📥 Install Nodes
         if: steps.node-cache.outputs.cache-hit != 'true'
@@ -112,19 +122,24 @@ jobs:
           sudo chmod -R 777 n8n_data
 
       # ==================================================================
-      # 5. LAUNCH SERVICES (ISOLATED CONTAINERS)
+      # 5. LAUNCH SERVICES (ISOLATED + SECURE)
       # ==================================================================
-      - name: 🚀 Launch Microservices
+      - name: 🚀 Launch Bot Swarm
         env:
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Securely passing Secrets
+          NGROK_AUTH: ${{ secrets.NGROK_TOKEN }}
         run: |
-          docker network create bot-net
-          ngrok config add-authtoken ${{ secrets.NGROK_TOKEN }}
+          # Idempotent Network
+          docker network create bot-net || true
+          
+          # Ngrok
+          ngrok config add-authtoken $NGROK_AUTH
           ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > /dev/null &
           sleep 5
           
-          # --- SERVICE 1: AI BRAIN (Python) ---
+          # --- SERVICE 1: AI (Zombie Mode) ---
           mkdir ai
           cat << 'EOF' > ai/ai_server.py
           import g4f, flask, logging
@@ -138,25 +153,18 @@ jobs:
                   response = g4f.ChatCompletion.create(model=g4f.models.gpt_4, messages=[{'role': 'user', 'content': msg}])
                   return flask.jsonify({'response': response})
               except Exception as e: return flask.jsonify({'error': str(e)}), 500
+          # Add simple health endpoint
+          @app.route('/health', methods=['GET'])
+          def health(): return "OK", 200
           if __name__ == '__main__': app.run(host='0.0.0.0', port=5000)
           EOF
 
-          docker run -d --name ai-server --network bot-net \
+          docker run -d --name ai-server --network bot-net --restart unless-stopped \
             -v $(pwd)/ai:/app -w /app \
             python:3.9-slim sh -c "apt-get update && apt-get install -y curl build-essential && pip install flask g4f curl_cffi && while true; do python ai_server.py; sleep 2; done"
 
-          # Health Check for AI
-          echo "⏳ Checking AI Health..."
-          RETRIES=0
-          until docker exec ai-server curl -s http://localhost:5000/chat > /dev/null 2>&1 || [ $RETRIES -eq 30 ]; do 
-            echo "Waiting for AI... ($RETRIES/30)"
-            sleep 10
-            RETRIES=$((RETRIES+1))
-          done
-
-          # --- SERVICE 2: n8n (Orchestrator) ---
-          # Optimized memory settings for Node.js
-          docker run -d --name n8n --network bot-net \
+          # --- SERVICE 2: n8n (Memory Optimized) ---
+          docker run -d --name n8n --network bot-net --restart unless-stopped \
             -v $(pwd)/n8n_data:/home/node/.n8n \
             -e N8N_ENCRYPTION_KEY="${{ secrets.N8N_ENCRYPTION_KEY }}" \
             -e N8N_SECURE_COOKIE=false \
@@ -169,20 +177,20 @@ jobs:
             -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
             n8nio/n8n
 
-          # --- SERVICE 3: WhatsApp Bot (Gateway) ---
-          mkdir whatsapp public
+          # --- SERVICE 3: WA-BOT (Media + Dedupe + Queue) ---
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"6.6.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2","async-mutex":"^0.5.0"}}' > whatsapp/package.json
           
           cat << 'EOF' > whatsapp/index.js
-          const { default: makeWASocket, DisconnectReason, BufferJSON, useMultiFileAuthState, makeCacheableSignalKeyStore, delay, Browsers } = require('@whiskeysockets/baileys');
+          const { default: makeWASocket, DisconnectReason, BufferJSON, useMultiFileAuthState, makeCacheableSignalKeyStore, delay } = require('@whiskeysockets/baileys');
           const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino');
-          const { Mutex } = require('async-mutex');
+          const { Mutex } = require('async-mutex'); const NodeCache = require('node-cache');
           
           const app = express(); app.use(express.json());
           const PORT = 10000; 
           const N8N_URL = "http://n8n:5678/webhook/whatsapp"; 
           const MONGO_URL = process.env.MONGODB_URI;
-          const sendMutex = new Mutex(); // Thread Safety
+          const sendMutex = new Mutex();
+          const msgCache = new NodeCache({ stdTTL: 60 });
           
           const authSchema = new mongoose.Schema({ _id: String, data: Object }); 
           const AuthModel = mongoose.model('Auth_Final_v1', authSchema, 'auth_final_v1');
@@ -196,7 +204,6 @@ jobs:
           }
           
           let sock; let qrData = null;
-          
           async function start() {
               try {
                   if(mongoose.connection.readyState === 0) await mongoose.connect(MONGO_URL);
@@ -209,104 +216,91 @@ jobs:
                       printQRInTerminal: false, 
                       browser: ["Windows", "Chrome", "10.0"], 
                       connectTimeoutMs: 60000,
-                      syncFullHistory: false // Saves Bandwidth & RAM
+                      syncFullHistory: false
                   });
                   
                   sock.ev.on('creds.update', saveCreds);
                   sock.ev.on('connection.update', async (u) => { 
                       const { connection, lastDisconnect, qr } = u; 
                       if(qr) qrData = qr; 
-                      if(connection === 'open') { qrData = null; console.log("✅ WhatsApp Connected"); } 
+                      if(connection === 'open') { qrData = null; console.log("✅ Connected"); } 
                       if(connection === 'close') { 
                           const code = lastDisconnect.error?.output?.statusCode; 
                           if(code === DisconnectReason.loggedOut) { await clear(); process.exit(1); } 
-                          else { setTimeout(start, 3000); } 
+                          else { setTimeout(start, 5000); } 
                       } 
                   });
                   
-                  // MESSAGE HANDLER
                   sock.ev.on('messages.upsert', async ({ messages }) => { 
                       const msg = messages[0]; 
                       if(!msg.message || msg.key.fromMe) return; 
+                      // Deduplication
+                      if (msgCache.has(msg.key.id)) return;
+                      msgCache.set(msg.key.id, true);
+
                       try { 
                           const realNumber = (msg.key.participant || msg.key.remoteJid).split('@')[0]; 
-                          // Send Event to n8n
                           axios.post(N8N_URL, { 
                               event: "message",
                               from: realNumber, 
                               text: msg.message.conversation || msg.message.extendedTextMessage?.text, 
                               name: msg.pushName, 
                               full_json: msg 
-                          }).catch((err) => console.error("n8n Push Error:", err.message)); 
+                          }).catch(()=>{}); 
                       } catch (e) {} 
                   });
-
-                  // CALL HANDLER (Log Only)
+                  
                   sock.ev.on('call', async (calls) => {
                       const call = calls[0];
-                      if(call.status === 'offer') {
-                          console.log("📞 Call from:", call.from);
-                          axios.post(N8N_URL, { 
-                              event: "call", 
-                              from: call.from.split('@')[0], 
-                              call_id: call.id 
-                          }).catch(()=>{}); 
-                      }
+                      if(call.status === 'offer') axios.post(N8N_URL, { event: "call", from: call.from.split('@')[0], id: call.id }).catch(()=>{});
                   });
 
-              } catch (e) { console.error("Start Error:", e); setTimeout(start, 5000); }
+              } catch (e) { setTimeout(start, 5000); }
           }
           
-          // API: SEND (Text/Media)
           app.post('/send', async (req, res) => { 
               try { 
-                  if (!sock) return res.status(503).json({ error: "Initializing..." }); 
-                  const { number, message, type = 'text', url, caption } = req.body; 
+                  if (!sock) return res.status(503).json({ error: "Init..." }); 
+                  const { number, message, type='text', url, caption } = req.body; 
                   const fullId = number.includes('@') ? number : `${number}@s.whatsapp.net`; 
                   
                   await sendMutex.runExclusive(async () => {
-                      // Anti-Ban Delays
                       await sock.sendPresenceUpdate('composing', fullId);
                       await delay(Math.floor(Math.random() * 500) + 500); 
                       await sock.sendPresenceUpdate('paused', fullId);
-
-                      // Type Check
-                      if (type === 'text') {
-                          await sock.sendMessage(fullId, { text: message });
-                      } else if (type === 'image' && url) {
-                          await sock.sendMessage(fullId, { image: { url: url }, caption: caption || message });
-                      } else if (type === 'video' && url) {
-                          await sock.sendMessage(fullId, { video: { url: url }, caption: caption || message });
-                      } else if (type === 'audio' && url) {
-                          await sock.sendMessage(fullId, { audio: { url: url }, mimetype: 'audio/mp4' });
-                      }
                       
-                      await delay(500); // Cool-down
+                      if(type==='text') await sock.sendMessage(fullId, { text: message });
+                      else if(type==='image') await sock.sendMessage(fullId, { image: { url }, caption });
+                      else if(type==='video') await sock.sendMessage(fullId, { video: { url }, caption });
+                      else if(type==='audio') await sock.sendMessage(fullId, { audio: { url }, mimetype: 'audio/mp4' });
+
+                      await delay(500);
                   });
                   res.json({ status: true }); 
               } catch (e) { res.status(500).json({ error: e.message }); } 
           });
           
+          // Health Check for Observer
+          app.get('/health', (req, res) => res.send("OK"));
           app.get('/qr', async (req, res) => { if(sock?.user && !qrData) return res.send('<h1>✅ Connected</h1>'); if(!qrData) return res.send('<h1>⏳ Generating...</h1>'); const url = await QRCode.toDataURL(qrData); res.send(`<div style="text-align:center"><h1>Scan QR</h1><img src="${url}" /></div>`); });
           app.listen(PORT, () => { console.log(`Bot on ${PORT}`); start(); });
           EOF
 
           # --- SERVICE 4: REVERSE PROXY ---
-          echo '<!DOCTYPE html><html><head><meta http-equiv="refresh" content="30"><title>Status</title></head><body style="background:#000;color:#0f0;text-align:center;padding:50px;"><h1>🚀 v66 Active</h1></body></html>' > public/index.html
-          printf ":80 {\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n reverse_proxy /send wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n  try_files {path} /index.html\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
+          echo 'Status: v68 Online' > public/index.html
+          printf ":80 {\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
 
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile -v $(pwd)/public:/srv/public caddy:latest
           
-          # Run WA-Bot with restart policy
           docker run -d --name wa-bot --network bot-net --restart unless-stopped \
             -v $(pwd)/whatsapp:/app -w /app \
             -e MONGODB_URI="${{ secrets.MONGODB_URI }}" \
-            node:20-alpine sh -c "apk add --no-cache git ffmpeg && npm install && while true; do node index.js; echo 'Crashed. Restarting...'; sleep 2; done"
+            node:20-alpine sh -c "apk add --no-cache git ffmpeg && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
-          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>System v66 Online</b>" -d parse_mode="HTML"
+          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>System v68 Online</b>" -d parse_mode="HTML"
 
       # ==================================================================
-      # 6. MAINTENANCE LOOP (THE OBSERVER)
+      # 6. OBSERVER LOOP (Groq Health Checks + Handover)
       # ==================================================================
       - name: 🔄 Observer Loop
         env:
@@ -314,54 +308,39 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          N8N_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
         run: |
+          trap 'echo "🚨 Emergency Save"; node smart_sync.js up; exit 0' EXIT
           START=$(date +%s)
-          echo "💓 Observer Logic Started..."
           
           while true; do
-             NOW=$(date +%s)
-             DIFF=$((NOW - START))
+             NOW=$(date +%s); DIFF=$((NOW - START))
              
-             # --- 5h 50m HANDOVER LOGIC ---
+             # --- 5h 50m HANDOVER ---
              if [ $DIFF -ge 21000 ]; then
-                 echo "⏰ Time Limit Reached. Handover..."
+                 echo "⏰ Handover Time."
                  node smart_sync.js up
-                 echo "🔫 Triggering Next Runner..."
                  gh workflow run main.yml
                  sleep 30
-                 echo "👋 Exiting Gracefully."
-                 curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="♻️ <b>Auto-Handover Complete!</b>" -d parse_mode="HTML"
                  exit 0
              fi
              
-             # --- CRASH DETECTION & LOGGING (New) ---
-             
-             # Check n8n
-             if ! docker ps | grep -q n8n; then 
-                echo "🚨 n8n CRASHED! Fetching logs..."
-                docker logs --tail 20 n8n
-                docker restart n8n
-                curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="⚠️ <b>n8n Restarted!</b>" -d parse_mode="HTML"
+             # --- DEEP HEALTH CHECKS (Groq Suggestion) ---
+             # Check AI
+             if ! docker exec ai-server curl -s http://localhost:5000/health >/dev/null; then
+                 echo "⚠️ AI Unresponsive. Restarting..."
+                 docker restart ai-server
              fi
-             
-             # Check wa-bot
-             if ! docker ps | grep -q wa-bot; then 
-                echo "🚨 WA-Bot CRASHED! Fetching logs..."
-                docker logs --tail 20 wa-bot
-                docker restart wa-bot
+             # Check WA-Bot
+             if ! docker exec wa-bot curl -s http://localhost:10000/health >/dev/null; then
+                  # Don't restart immediately, give it a chance to connect
+                  if ! docker ps | grep -q wa-bot; then docker restart wa-bot; fi
              fi
+             # Check n8n (Process check)
+             if ! docker ps | grep -q n8n; then docker restart n8n; fi
 
-             # Check AI-Server
-             if ! docker ps | grep -q ai-server; then
-                echo "🚨 AI Server CRASHED! Restarting..."
-                docker restart ai-server
-             fi
-             
-             # --- DATA SYNC ---
+             # --- DATA SYNC (Every 15 mins) ---
              if [ $((DIFF % 900)) -lt 10 ]; then node smart_sync.js up; fi
              
-             # --- HEARTBEAT ---
              echo "💓 Alive: ${DIFF}s / 21000s"
              sleep 60
           done
@@ -372,6 +351,4 @@ jobs:
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-           # Get last logs for debugging
-           docker logs --tail 50 wa-bot || true
-           curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="⚠️ <b>Workflow Failed! Check Logs.</b>" -d parse_mode="HTML"
+           curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="⚠️ <b>CRITICAL FAILURE</b>" -d parse_mode="HTML"

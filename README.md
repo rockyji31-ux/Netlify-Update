@@ -1,188 +1,447 @@
-# 🤖 Ultimate WhatsApp AI Automation Bot (Production v75)
+# 🤖 Ultimate WhatsApp AI Automation (Zero Cost & Immortal)
 
-Welcome to the **most advanced, self-healing, and free** WhatsApp Automation System running entirely on **GitHub Actions**. This system integrates **n8n (Automation)**, **WhatsApp (Baileys)**, and **Free AI (g4f)** into a single powerful workflow.
-
----
-
-## 🌟 Key Features
-* **100% Free Hosting:** Runs on GitHub Actions (Zero cost).
-* **24/7 Uptime Loop:** Automatically restarts every 6 hours (Handover Logic).
-* **Crash Proof:** Uses SQLite WAL mode + Self-Healing Observer.
-* **Anti-Ban Technology:** Browser Spoofing, Human Typing Delays, and Queue System.
-* **Media Support:** Send Text, Images, Videos, and Audio.
-* **Smart Backups:** Auto-syncs data to Supabase & Telegram.
+यह दुनिया का सबसे एडवांस और **100% फ्री** WhatsApp Bot है जो **GitHub Actions** पर चलता है। यह कभी बंद नहीं होता (Auto-Healing) और आपके डेटा को सुरक्षित रखता है।
 
 ---
 
-## 🛠️ Step 1: Create Necessary Accounts
+## 🚦 पहले यह तैयारी करें (Prerequisites)
 
-Before touching the code, create these 5 free accounts and save their details.
-
-### 1. GitHub (The Host)
-* Create a new account at [github.com](https://github.com).
-* Create a **New Public Repository** (e.g., `my-wa-bot`).
-
-### 2. Ngrok (The Tunnel)
-* Sign up at [ngrok.com](https://ngrok.com).
-* Go to **Dashboard** → **Your Authtoken**. Copy it.
-* Go to **Cloud Edge** → **Domains** → Create a free static domain (e.g., `my-bot-123.ngrok-free.app`).
-
-### 3. MongoDB Atlas (Session Storage)
-* Sign up at [mongodb.com](https://www.mongodb.com/cloud/atlas).
-* Create a free **Shared Cluster**.
-* Go to **Network Access** → Add IP Address → **Allow Access from Anywhere (0.0.0.0/0)**.
-* Go to **Database Access** → Create a User (Role: Atlas Admin).
-* **Get Connection String:** Click "Connect" → "Drivers" → Copy URL (Replace `<password>` with your user password).
-
-### 4. Supabase (Data Backup)
-* Sign up at [supabase.com](https://supabase.com).
-* Create a New Project.
-* Go to **Storage** (Left Sidebar) → Create a new Bucket named `bot-storage`. **(Make it Private)**.
-* Go to **Project Settings** → **API**.
-    * Copy **Project URL**.
-    * Copy **service_role** Key (Secret).
-
-### 5. Telegram (Notifications)
-* Open Telegram app.
-* Search for **@BotFather** → Send `/newbot` → Get **Bot Token**.
-* Search for **@userinfobot** → Get your numeric **User ID**.
+इस सेटअप को शुरू करने से पहले, अपने ब्राउज़र में **GitHub Repository** खोलें और:
+1.  **Settings** टैब पर जाएं।
+2.  बाएं मेनू में **Secrets and variables** -> **Actions** पर क्लिक करें।
+3.  **New repository secret** बटन तैयार रखें। हम जैसे-जैसे अकाउंट बनाएंगे, यहाँ सेव करते जाएंगे।
 
 ---
 
-## 🔐 Step 2: Setup GitHub Secrets
+## 🛠️ Step 1: Ngrok Setup (Public URL)
 
-Go to your **GitHub Repository** → **Settings** → **Secrets and variables** → **Actions**.
-Click **"New repository secret"** and add these EXACT names:
+यह आपके बॉट को इंटरनेट पर लाइव करता है।
 
-| Secret Name | Value to Paste | Description |
-| :--- | :--- | :--- |
-| `GH_PAT` | `ghp_xxxx...` | Your Personal Access Token (Settings -> Developer Settings -> Tokens -> Classic -> Scope: Workflow). |
-| `MONGODB_URI` | `mongodb+srv://...` | Connection string from Step 1.3. |
-| `N8N_ENCRYPTION_KEY` | `any-random-password` | Password to encrypt n8n credentials. |
-| `NGROK_DOMAIN` | `my-bot.ngrok-free.app` | Your static domain from Step 1.2 (No http://). |
-| `NGROK_TOKEN` | `2AmX...` | Authtoken from Step 1.2. |
-| `SUPABASE_SERVICE_ROLE` | `eyJhbG...` | "service_role" key from Step 1.4. |
-| `SUPABASE_URL` | `https://xyz.supabase.co` | Project URL from Step 1.4. |
-| `TELEGRAM_BOT_TOKEN` | `1234:ABC...` | From BotFather. |
-| `TELEGRAM_CHAT_ID` | `987654321` | From UserInfoBot. |
-
----
-
-## 🚀 Step 3: Deployment
-
-1.  In your Repo, create a new file path: `.github/workflows/main.yml`.
-2.  **Paste the "Production v75" code** provided by the AI.
-3.  Click **Commit Changes**.
-4.  Go to the **Actions** tab.
-5.  Select **"Production v75"** on the left sidebar.
-6.  Click **Run workflow**.
+1.  [Ngrok Dashboard](https://dashboard.ngrok.com/) पर जाएं और साइन अप करें।
+2.  **Authtoken:**
+    * लेफ्ट साइडबार में **"Your Authtoken"** पर क्लिक करें।
+    * ऊपर कॉपी बटन दबाएं।
+    * 👉 **GitHub Secret Name:** `NGROK_TOKEN`
+    * 👉 **Value:** (जो कॉपी किया वह पेस्ट करें)
+3.  **Static Domain:**
+    * लेफ्ट साइडबार में **Cloud Edge** -> **Domains** पर क्लिक करें।
+    * **+ New Domain** पर क्लिक करें (फ्री वाला चुनें)।
+    * आपको एक डोमेन मिलेगा जैसे: `vulgarly-unrefusable-jakobe.ngrok-free.dev`
+    * इसमें से `https://` हटा दें।
+    * 👉 **GitHub Secret Name:** `NGROK_DOMAIN`
+    * 👉 **Value:** `your-domain.ngrok-free.dev` (बिना https के)
 
 ---
 
-## 📱 Step 4: Connecting WhatsApp
+## 🛠️ Step 2: MongoDB Atlas (The Brain)
 
-1.  Wait 2-3 minutes.
-2.  You will receive a message on Telegram: **"🟢 System v75 Online"**.
-3.  Open your browser and visit: `https://YOUR-NGROK-DOMAIN/qr`
-    * *Example:* `https://my-bot-123.ngrok-free.app/qr`
-4.  Open WhatsApp on your phone → **Linked Devices** → **Link a Device**.
-5.  Scan the QR Code.
-6.  **Done!** Your bot is now live.
+यहाँ WhatsApp का लॉगिन सेशन सेव होगा। **(सबसे महत्वपूर्ण स्टेप)**
 
----
+1.  [MongoDB Atlas](https://www.mongodb.com/cloud/atlas) पर लॉगिन करें।
+2.  **Create Cluster:** फ्री वाला "Shared Cluster" बनाएं।
+3.  **Create User:**
+    * **Database Access** (बाएं मेनू) -> **+ Add New Database User**.
+    * Username: `admin` (या अपना नाम)।
+    * Password: एक सिंपल पासवर्ड रखें (e.g., `pass123`) और उसे याद रखें।
+    * **Create User** बटन दबाएं।
+4.  **Allow IP:**
+    * **Network Access** (बाएं मेनू) -> **+ Add IP Address**.
+    * **Allow Access from Anywhere** पर क्लिक करें (`0.0.0.0/0`).
+    * Confirm करें।
+5.  **Get Connection URL:**
+    * **Deployment** -> **Database** पर जाएं।
+    * **Connect** बटन -> **Drivers** -> Node.js चुनें।
+    * लिंक कॉपी करें।
 
-## 📡 Step 5: API Endpoints (How to Use)
+### ⚠️ IMPORTANT: URI सही कैसे बनाएं?
+कॉपी किए गए लिंक को नोटपैड में पेस्ट करें और उसे एडिट करें।
 
-You can use these endpoints inside **n8n (HTTP Request Node)** or any other tool.
+**गलत लिंक (ऐसा दिखता है):**
+`mongodb+srv://user:pass@cluster.net/?appName=Cluster0` ❌
 
-### 1. Send Text Message
-* **URL:** `http://wa-bot:10000/send`
-* **Method:** `POST`
-* **JSON Body:**
-    ```json
-    {
-      "number": "919876543210",
-      "message": "Hello from GitHub Actions!"
-    }
-    ```
+**सही लिंक (ऐसा बनाना है):**
+`mongodb+srv://user:pass@cluster.net/wa_bot_db?retryWrites=true&w=majority` ✅
 
-### 2. Send Image 📸
-* **URL:** `http://wa-bot:10000/send`
-* **Method:** `POST`
-* **JSON Body:**
-    ```json
-    {
-      "number": "919876543210",
-      "type": "image",
-      "url": "[https://example.com/cat.jpg](https://example.com/cat.jpg)",
-      "caption": "Look at this cat!"
-    }
-    ```
+* `<password>` की जगह अपना पासवर्ड डालें।
+* `.net/` के ठीक बाद `wa_bot_db` लिखना अनिवार्य है।
 
-### 3. Send Video 🎥
-* **URL:** `http://wa-bot:10000/send`
-* **Method:** `POST`
-* **JSON Body:**
-    ```json
-    {
-      "number": "919876543210",
-      "type": "video",
-      "url": "[https://example.com/video.mp4](https://example.com/video.mp4)",
-      "caption": "Watch this!"
-    }
-    ```
-
-### 4. Send Audio 🎵
-* **URL:** `http://wa-bot:10000/send`
-* **Method:** `POST`
-* **JSON Body:**
-    ```json
-    {
-      "number": "919876543210",
-      "type": "audio",
-      "url": "[https://example.com/audio.mp3](https://example.com/audio.mp3)"
-    }
-    ```
-
-### 5. Chat with AI (g4f) 🧠
-* **URL:** `http://ai-server:5000/chat`
-* **Method:** `POST`
-* **JSON Body:**
-    ```json
-    {
-      "message": "Write a poem about coding."
-    }
-    ```
-* **Response:** `{"response": "Coding is art..."}`
+👉 **GitHub Secret Name:** `MONGODB_URI`
+👉 **Value:** (अपना सही वाला लिंक पेस्ट करें)
 
 ---
 
-## 📥 Receiving Messages (n8n Setup)
+## 🛠️ Step 3: Supabase (The Backup)
 
-To process incoming WhatsApp messages in n8n:
+यह आपके डेटा का बैकअप रखता है।
 
-1.  Open n8n Dashboard (`https://YOUR-NGROK-DOMAIN/workflow`).
-2.  Add a **Webhook Node**.
-3.  Set Method: `POST`.
-4.  Set Path: `/webhook/whatsapp`.
-5.  **Activate** the workflow.
-6.  Now, when someone messages your bot, n8n will trigger automatically!
+1.  [Supabase](https://supabase.com/) पर नया प्रोजेक्ट बनाएं।
+2.  **Storage Setup:**
+    * बाएं मेनू में **Storage** पर जाएं।
+    * **New Bucket** बनाएं -> नाम रखें: `bot-storage`.
+    * "Public bucket" को **OFF** रखें।
+3.  **Get Credentials:**
+    * बाएं मेनू में सबसे नीचे **Project Settings** (गियर आइकन) -> **API** पर जाएं।
+    * **Project URL** कॉपी करें।
+        * 👉 **GitHub Secret Name:** `SUPABASE_URL`
+    * **service_role** (Secret Key) कॉपी करें (anon public नहीं)।
+        * 👉 **GitHub Secret Name:** `SUPABASE_SERVICE_ROLE`
 
 ---
 
-## ❓ FAQ & Troubleshooting
+## 🛠️ Step 4: GitHub Token & n8n Key
 
-**Q: Does it work if I close my laptop?**
-A: **Yes.** It runs on GitHub's cloud servers, not your laptop.
+1.  **GH_PAT (GitHub Token):**
+    * GitHub में अपनी प्रोफाइल फोटो -> Settings -> Developer Settings -> Personal access tokens -> Tokens (classic).
+    * **Generate new token (classic)** -> Scope में `workflow` टिक करें।
+    * 👉 **GitHub Secret Name:** `GH_PAT`
+2.  **Encryption Key:**
+    * कोई भी रैंडम पासवर्ड सोच लें (e.g., `MySecretPass123`).
+    * 👉 **GitHub Secret Name:** `N8N_ENCRYPTION_KEY`
 
-**Q: What if I log out from WhatsApp on my phone?**
-A: The bot will detect the logout, automatically **delete** the database, restart, and show a new QR code at `/qr` for you to scan again.
+---
 
-**Q: How do I stop the bot?**
-A: Go to GitHub Actions -> Click the running workflow -> Click **"Cancel run"**. The bot will save your data and stop safely.
+## 🚀 Step 5: Telegram Notifications (Optional)
 
-**Q: Will I get banned?**
-A: Risk is very low. The bot uses "Human Typing Delays", "Queue System", and "Browser Spoofing" to look like a real PC user. **Do not spam 1000s of strangers.**
+अगर आप चाहते हैं कि बॉट आपको स्टेटस अपडेट भेजे:
+1.  Telegram पर **@BotFather** को मैसेज करें `/newbot`.
+    * 👉 **GitHub Secret Name:** `TELEGRAM_BOT_TOKEN`
+2.  **@userinfobot** को मैसेज करें और अपनी ID निकालें।
+    * 👉 **GitHub Secret Name:** `TELEGRAM_CHAT_ID`
 
-**Q: Where is my data?**
-A: Your n8n workflows and history are saved in **Supabase** (`database.sqlite`). Even if GitHub deletes the server, your data is restored in the next run.
+---
+
+## 🔥 Step 6: Deploy the Code (Production v83)
+
+1.  अपने GitHub Repo में जाएं।
+2.  **Add file** -> **Create new file** पर क्लिक करें।
+3.  फाइल का नाम लिखें: `.github/workflows/main.yml`
+4.  नीचे दिया गया **v83 Code** कॉपी करके पेस्ट करें और **Commit Changes** दबाएं।
+
+```yaml
+name: "Production v83 (Final Fix: Real Version)"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *'
+
+concurrency:
+  group: "production-bot"
+  cancel-in-progress: true
+
+jobs:
+  run-v83-final:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # 1. SYSTEM TUNING
+      - name: ⚡ Optimize Environment
+        run: |
+          sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+          sudo sysctl -w net.core.default_qdisc=fq && sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
+          sudo apt-get update && sudo apt-get install -y sqlite3 curl ffmpeg
+          curl -s [https://ngrok-agent.s3.amazonaws.com/ngrok.asc](https://ngrok-agent.s3.amazonaws.com/ngrok.asc) | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+          echo "deb [https://ngrok-agent.s3.amazonaws.com](https://ngrok-agent.s3.amazonaws.com) buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
+          sudo apt-get update && sudo apt-get install -y ngrok
+          npm install @supabase/supabase-js
+          echo "✅ System Tuned"
+
+      # 2. CACHING
+      - name: 📦 Cache Modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            n8n_data/nodes
+            whatsapp/node_modules
+          key: bot-deps-v1-${{ runner.os }}
+
+      # 3. SMART DATA SYNC
+      - name: 💾 Setup Data Layer
+        env:
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          N8N_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
+        run: |
+          mkdir -p n8n_data/nodes whatsapp public ai
+          
+          cat << 'EOF' > smart_sync.js
+          const { createClient } = require('@supabase/supabase-js');
+          const fs = require('fs'); const { execSync, spawnSync } = require('child_process');
+          
+          let sbUrl = process.env.SUPABASE_URL;
+          if (!sbUrl || !sbUrl.startsWith('http')) {
+              console.log("⚠️ Using Fallback URL");
+              sbUrl = '[https://ymatdzammnejrmmiyygg.supabase.co](https://ymatdzammnejrmmiyygg.supabase.co)';
+          }
+          const sb = createClient(sbUrl, process.env.SUPABASE_KEY);
+          const live='n8n_data/database.sqlite', safe='n8n_data/db_snap.sqlite';
+
+          async function retry(fn, retries=3) {
+            for (let i=0; i<retries; i++) {
+              try { await fn(); return; } catch (err) {
+                if (i === retries-1) throw err;
+                await new Promise(r => setTimeout(r, 2000));
+              }
+            }
+          }
+
+          async function run(mode) {
+            try {
+              if(mode==='down') {
+                console.log("📥 Downloading...");
+                await retry(async () => {
+                   const { data, error } = await sb.storage.from('bot-storage').download('database.sqlite');
+                   if(error) { console.log("⚠️ Fresh Start"); return; }
+                   fs.writeFileSync(live, Buffer.from(await data.arrayBuffer()));
+                   try { execSync("sqlite3 " + live + " 'PRAGMA journal_mode=WAL;'"); } catch(e) {}
+                });
+              } else {
+                if(!fs.existsSync(live)) return;
+                if(fs.existsSync(safe)) fs.unlinkSync(safe);
+                execSync("sqlite3 " + live + " \".backup '" + safe + "'\"");
+                execSync("sqlite3 " + safe + " 'VACUUM;'");
+                
+                console.log("📤 Uploading...");
+                await retry(async () => {
+                   const { error } = await sb.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(safe), { upsert: true });
+                   if(error) throw error;
+                });
+
+                if (process.env.TG_TOKEN && process.env.TG_ID) {
+                    try {
+                        const caption = `💾 <b>Backup</b>\n📅 ${new Date().toISOString()}\n🔑 Key: <code>${process.env.N8N_KEY}</code>`;
+                        const args = ["-s", "-F", `chat_id=${process.env.TG_ID}`, "-F", `document=@${safe};filename=n8n_backup.sqlite`, "-F", `caption=${caption}`, "-F", "parse_mode=HTML", `https://api.telegram.org/bot${process.env.TG_TOKEN}/sendDocument`];
+                        spawnSync("curl", args);
+                    } catch (e) { console.error("Telegram Fail"); }
+                }
+              }
+            } catch(e) { console.error("Sync Error:", e.message); }
+          }
+          run(process.argv[2]);
+          EOF
+          
+          node smart_sync.js down
+          sudo chmod -R 777 n8n_data
+
+      # 4. INSTALL NODES
+      - name: 📥 Install Nodes
+        if: steps.node-cache.outputs.cache-hit != 'true'
+        run: |
+          cd n8n_data/nodes && npm init -y && npm install n8n-nodes-datastore n8n-nodes-run-node-with-credentials-x n8n-nodes-tesseractjs && cd ../..
+          sudo chmod -R 777 n8n_data
+
+      # 5. LAUNCH SERVICES
+      - name: 🚀 Launch Bot Swarm
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          NGROK_AUTH: ${{ secrets.NGROK_TOKEN }}
+        run: |
+          docker network create bot-net || true
+          ngrok config add-authtoken $NGROK_AUTH
+          ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > /dev/null &
+          sleep 5
+          
+          # AI Service
+          cat << 'EOF' > ai/ai_server.py
+          import g4f, flask, logging
+          app = flask.Flask(__name__)
+          log = logging.getLogger('werkzeug'); log.setLevel(logging.ERROR)
+          @app.route('/chat', methods=['POST'])
+          def chat():
+              try:
+                  msg = flask.request.json.get('message')
+                  if not msg: return flask.jsonify({'error': 'No message'}), 400
+                  response = g4f.ChatCompletion.create(model=g4f.models.gpt_4, messages=[{'role': 'user', 'content': msg}])
+                  return flask.jsonify({'response': response})
+              except Exception as e: return flask.jsonify({'error': str(e)}), 500
+          @app.route('/health', methods=['GET'])
+          def health(): return "OK", 200
+          if __name__ == '__main__': app.run(host='0.0.0.0', port=5000)
+          EOF
+
+          docker run -d --name ai-server --network bot-net --restart unless-stopped \
+            -v $(pwd)/ai:/app -w /app \
+            python:3.9-slim sh -c "apt-get update && apt-get install -y curl build-essential && pip install flask g4f curl_cffi && while true; do python ai_server.py; sleep 2; done"
+
+          # n8n Service
+          docker run -d --name n8n --network bot-net --restart unless-stopped \
+            -v $(pwd)/n8n_data:/home/node/.n8n \
+            -e N8N_ENCRYPTION_KEY="${{ secrets.N8N_ENCRYPTION_KEY }}" \
+            -e N8N_SECURE_COOKIE=false \
+            -e WEBHOOK_URL="https://${{ secrets.NGROK_DOMAIN }}" \
+            -e N8N_BLOCK_ENV_ACCESS_IN_NODE=false \
+            -e NODE_OPTIONS="--max-old-space-size=2048" \
+            -e DB_SQLITE_VACUUM_ON_STARTUP=true \
+            -e EXECUTIONS_DATA_PRUNE=true \
+            -e EXECUTIONS_DATA_MAX_AGE=24 \
+            -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
+            n8nio/n8n
+
+          # WhatsApp Service (🔥 REAL VERSION FIX 🔥)
+          echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"^6.7.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
+          
+          cat << 'EOF' > whatsapp/index.js
+          const { default: makeWASocket, DisconnectReason, BufferJSON, useMultiFileAuthState, makeCacheableSignalKeyStore, delay, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+          const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino');
+          const NodeCache = require('node-cache');
+          
+          const app = express(); app.use(express.json());
+          const PORT = 10000; const N8N_URL = "http://n8n:5678/webhook/whatsapp"; const MONGO_URL = process.env.MONGODB_URI;
+          
+          const authSchema = new mongoose.Schema({ _id: String, data: Object }); 
+          // New Collection for fresh start
+          const AuthModel = mongoose.model('Auth_Production_v83', authSchema, 'auth_production_v83');
+          
+          async function useMongoDB() {
+              const writeData = async (data, id) => { 
+                  try { 
+                      const json = JSON.parse(JSON.stringify(data, BufferJSON.replacer)); 
+                      await AuthModel.findOneAndUpdate({ _id: id }, { data: json, _id: id }, { upsert: true }); 
+                  } catch (err) { console.error("DB Write Fail:", err.message); } 
+              };
+              const readData = async (id) => { 
+                  try { 
+                      const doc = await AuthModel.findById(id); 
+                      return doc ? JSON.parse(JSON.stringify(doc.data), BufferJSON.reviver) : null; 
+                  } catch (err) { return null; } 
+              };
+              const removeData = async (id) => { try { await AuthModel.findByIdAndDelete(id); } catch (err) {} };
+              const creds = (await readData('creds')) || (await (require('@whiskeysockets/baileys').initAuthCreds)());
+              return { state: { creds, keys: { get: async (t, i) => { const d = {}; await Promise.all(i.map(async id => { let v = await readData(`${t}-${id}`); if (t === 'app-state-sync-key' && v) v = require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(v); if (v) d[id] = v; })); return d; }, set: async (d) => { const t = []; for (const c in d) for (const i in d[c]) { const v = d[c][i], k = `${c}-${i}`; t.push(v ? writeData(v, k) : removeData(k)); } await Promise.all(t); } } }, saveCreds: () => writeData(creds, 'creds'), clear: async () => { await AuthModel.deleteMany({}); } };
+          }
+          
+          let sock; let qrData = null;
+          const msgRetryCounterCache = new NodeCache();
+          
+          async function start() {
+              try {
+                  console.log("⏳ Connecting to MongoDB...");
+                  // Using the working Logic from Debugger (Verified)
+                  if(mongoose.connection.readyState === 0) await mongoose.connect(MONGO_URL, { dbName: 'wa_bot_db' });
+                  console.log("✅ MongoDB Connected");
+
+                  const { state, saveCreds, clear } = await useMongoDB(); global.clear = clear;
+                  
+                  // 🔥 FIX: Fetch REAL version from WhatsApp Servers
+                  const { version } = await fetchLatestBaileysVersion();
+                  console.log(`🚀 Starting Bot with REAL Version: ${version.join('.')}`);
+
+                  sock = makeWASocket({ 
+                      version, // Use Real Version
+                      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) }, 
+                      logger: pino({ level: 'silent' }), 
+                      printQRInTerminal: false, 
+                      browser: ["Windows", "Chrome", "10.0"], // Trusted Browser ID
+                      connectTimeoutMs: 60000, 
+                      defaultQueryTimeoutMs: 60000,
+                      keepAliveIntervalMs: 10000,
+                      syncFullHistory: false,
+                      msgRetryCounterCache
+                  });
+                  
+                  sock.ev.on('creds.update', saveCreds);
+                  sock.ev.on('connection.update', async (u) => { 
+                      const { connection, lastDisconnect, qr } = u; 
+                      if(qr) { qrData = qr; console.log("👉 QR Ready"); }
+                      if(connection === 'open') { qrData = null; console.log("✅ WhatsApp Connected!"); } 
+                      if(connection === 'close') { 
+                          const code = lastDisconnect.error?.output?.statusCode; 
+                          console.log(`❌ Closed: ${code}`);
+                          if(code === DisconnectReason.loggedOut || code === 440 || code === 405) { 
+                              console.log("⚠️ Session Invalid. Resetting...");
+                              await clear(); process.exit(1); 
+                          } else { setTimeout(start, 3000); } 
+                      } 
+                  });
+                  
+                  sock.ev.on('messages.upsert', async ({ messages }) => { 
+                      const msg = messages[0]; if(!msg.message || msg.key.fromMe) return; 
+                      try { 
+                          const realNumber = (msg.key.participant || msg.key.remoteJid).split('@')[0]; 
+                          axios.post(N8N_URL, { from: realNumber, text: msg.message.conversation || msg.message.extendedTextMessage?.text, name: msg.pushName, full_json: msg }).catch(()=>{}); 
+                      } catch (e) {} 
+                  });
+              } catch (e) { 
+                  console.error("Critical Startup Error:", e);
+                  setTimeout(start, 5000); 
+              }
+          }
+          
+          app.post('/send', async (req, res) => { 
+              try { 
+                  if (!sock) return res.status(503).json({ error: "Start" }); 
+                  const { number, message } = req.body; 
+                  const fullId = number.includes('@') ? number : `${number}@s.whatsapp.net`; 
+                  if (!sock.ws.isOpen) await new Promise(r => setTimeout(r, 2000));
+                  if (sock.ws.isOpen) { await sock.sendMessage(fullId, { text: message }); res.json({ status: true }); } 
+                  else { res.status(503).json({ error: "Disconnected" }); }
+              } catch (e) { res.status(500).json({ error: e.message }); } 
+          });
+          
+          app.get('/health', (req, res) => res.send("OK"));
+          
+          app.get('/qr', async (req, res) => { 
+              const meta = '<meta http-equiv="refresh" content="3">';
+              if(sock?.user && !qrData) return res.send(meta + '<h1>✅ Connected</h1><a href="/reset">Reset DB</a>'); 
+              if(!qrData) return res.send(meta + '<h1>⏳ Generating QR...</h1>'); 
+              const url = await QRCode.toDataURL(qrData); 
+              res.send(meta + `<div style="text-align:center"><h1>Scan QR</h1><img src="${url}" /><br/><br/><a href="/reset" style="color:red;font-size:20px;">RESET DATABASE</a></div>`); 
+          });
+
+          app.get('/reset', async (req, res) => { if(global.clear) await global.clear(); res.send("Wiped. Restarting..."); process.exit(1); });
+          app.listen(PORT, () => { console.log(`Bot on ${PORT}`); start(); });
+          EOF
+
+          # Reverse Proxy
+          echo 'Status: v83 Online' > public/index.html
+          printf ":80 {\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n reverse_proxy /reset wa-bot:10000\n reverse_proxy /health wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
+
+          docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile -v $(pwd)/public:/srv/public caddy:latest
+          docker run -d --name wa-bot --network bot-net --restart unless-stopped -v $(pwd)/whatsapp:/app -w /app -e MONGODB_URI="${{ secrets.MONGODB_URI }}" node:20-alpine sh -c "apk add --no-cache git ffmpeg && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
+
+          curl -s -X POST [https://api.telegram.org/bot$TG_TOKEN/sendMessage](https://api.telegram.org/bot$TG_TOKEN/sendMessage) -d chat_id=$TG_ID -d text="🟢 <b>System v83 Online (Version Fix)</b>" -d parse_mode="HTML"
+
+      # 6. OBSERVER LOOP
+      - name: 🔄 Observer Loop
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }} 
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          N8N_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
+        run: |
+          trap 'echo "🚨 Manual/Error Exit! Saving Data..."; node smart_sync.js up; exit 0' EXIT
+          START=$(date +%s)
+          while true; do
+             NOW=$(date +%s); DIFF=$((NOW - START))
+             
+             if [ $DIFF -ge 21000 ]; then
+                 echo "⏰ Handover Time."; node smart_sync.js up; gh workflow run main.yml; sleep 30; exit 0 
+             fi
+             
+             if ! docker exec ai-server curl -s http://localhost:5000/health >/dev/null; then docker restart ai-server; fi
+             if ! docker exec wa-bot curl -s http://localhost:10000/health >/dev/null; then 
+                 if ! docker ps | grep -q wa-bot; then docker restart wa-bot; fi
+             fi
+             if ! docker ps | grep -q n8n; then docker restart n8n; fi
+
+             if [ $((DIFF % 900)) -lt 10 ]; then node smart_sync.js up; fi
+             echo "💓 Alive: ${DIFF}s / 21000s"; sleep 60
+          done
+
+      - name: 🚨 Notify Failure
+        if: failure()
+        env:
+          TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+           docker logs --tail 50 wa-bot || true
+           curl -s -X POST [https://api.telegram.org/bot$TG_TOKEN/sendMessage](https://api.telegram.org/bot$TG_TOKEN/sendMessage) -d chat_id=$TG_ID -d text="⚠️ <b>CRITICAL FAILURE</b>" -d parse_mode="HTML"

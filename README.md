@@ -26,7 +26,7 @@
 3.  **Static Domain:**
     * लेफ्ट साइडबार में **Cloud Edge** -> **Domains** पर क्लिक करें।
     * **+ New Domain** पर क्लिक करें (फ्री वाला चुनें)।
-    * आपको एक डोमेन मिलेगा जैसे: `vulgarly-unrefusable-jakobe.ngrok-free.dev`
+    * आपको एक डोमेन मिलेगा जैसे: `xyz.ngrok-free.dev`
     * इसमें से `https://` हटा दें।
     * 👉 **GitHub Secret Name:** `NGROK_DOMAIN`
     * 👉 **Value:** `your-domain.ngrok-free.dev` (बिना https के)
@@ -57,10 +57,10 @@
 कॉपी किए गए लिंक को नोटपैड में पेस्ट करें और उसे एडिट करें।
 
 **गलत लिंक (ऐसा दिखता है):**
-`mongodb+srv://user:pass@cluster.net/?appName=Cluster0` ❌
+`mongodb+srv://user-id:<password>s@cluster.net/?appName=Cluster0` ❌
 
 **सही लिंक (ऐसा बनाना है):**
-`mongodb+srv://user:pass@cluster.net/wa_bot_db?retryWrites=true&w=majority` ✅
+`mongodb+srv://user-id:<password>@cluster.net/wa_bot_db?retryWrites=true&w=majority` ✅
 
 * `<password>` की जगह अपना पासवर्ड डालें।
 * `.net/` के ठीक बाद `wa_bot_db` लिखना अनिवार्य है।
@@ -83,7 +83,7 @@
     * बाएं मेनू में सबसे नीचे **Project Settings** (गियर आइकन) -> **API** पर जाएं।
     * **Project URL** कॉपी करें।
         * 👉 **GitHub Secret Name:** `SUPABASE_URL`
-    * **service_role** (Secret Key) कॉपी करें (anon public नहीं)।
+    * **service_role** (Secret Key) कॉपी करें ।
         * 👉 **GitHub Secret Name:** `SUPABASE_SERVICE_ROLE`
 
 ---

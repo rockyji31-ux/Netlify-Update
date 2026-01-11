@@ -1,4 +1,4 @@
-name: "Production v73 (Final: Vacuum + Backup + Key)"
+name: "Production v75 (Hybrid URL + Manual Cancel Safe)"
 
 on:
   workflow_dispatch:
@@ -10,27 +10,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  run-v73-perfect:
+  run-v75-final:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 360 # 6 Hours Safety Net (Logic stops at 5h 50m)
     
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
+      # ==================================================================
       # 1. SYSTEM TUNING
+      # ==================================================================
       - name: ⚡ Optimize Environment
         run: |
+          # 4GB Swap (Prevent RAM Crash)
           sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+          # Network Tuning
           sudo sysctl -w net.core.default_qdisc=fq && sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
+          
+          # Install Critical Deps (FFmpeg for WhatsApp Video)
           sudo apt-get update && sudo apt-get install -y sqlite3 curl ffmpeg
+          
+          # Install Ngrok
           curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
           echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
           sudo apt-get update && sudo apt-get install -y ngrok
+          
           npm install @supabase/supabase-js
           echo "✅ System Tuned"
 
-      # 2. CACHING
+      # ==================================================================
+      # 2. CACHING (Fast Startup)
+      # ==================================================================
       - name: 📦 Cache Modules
         uses: actions/cache@v3
         with:
@@ -39,14 +50,16 @@ jobs:
             whatsapp/node_modules
           key: bot-deps-v1-${{ runner.os }}
 
-      # 3. DATA SYNC (FIXED: Added Encryption Key to Telegram)
+      # ==================================================================
+      # 3. SMART DATA SYNC (Hybrid URL Logic)
+      # ==================================================================
       - name: 💾 Setup Data Layer
         env:
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }} # Optional
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          N8N_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }} # 👈 Added for Smart Sync
+          N8N_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
         run: |
           mkdir -p n8n_data/nodes whatsapp public ai
           
@@ -54,9 +67,14 @@ jobs:
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs'); const { execSync, spawnSync } = require('child_process');
           
-          const sbUrl = process.env.SUPABASE_URL || 'https://ymatdzammnejrmmiyygg.supabase.co';
+          // 🔥 FIX: Check if Env URL exists, else use Hardcoded (Prevents Crash)
+          let sbUrl = process.env.SUPABASE_URL;
+          if (!sbUrl || !sbUrl.startsWith('http')) {
+              console.log("⚠️ Using Fallback URL");
+              sbUrl = 'https://ymatdzammnejrmmiyygg.supabase.co';
+          }
+
           const sb = createClient(sbUrl, process.env.SUPABASE_KEY);
-          
           const live='n8n_data/database.sqlite', safe='n8n_data/db_snap.sqlite';
 
           async function retry(fn, retries=3) {
@@ -76,36 +94,31 @@ jobs:
                    const { data, error } = await sb.storage.from('bot-storage').download('database.sqlite');
                    if(error) { console.log("⚠️ Fresh Start"); return; }
                    fs.writeFileSync(live, Buffer.from(await data.arrayBuffer()));
-                   // WAL Mode (Anti-Corruption)
+                   // Enable WAL (Corruption Protection)
                    try { execSync("sqlite3 " + live + " 'PRAGMA journal_mode=WAL;'"); } catch(e) {}
                 });
               } else {
                 if(!fs.existsSync(live)) return;
                 
-                // 1. Create Backup
+                // Backup & Shrink
                 if(fs.existsSync(safe)) fs.unlinkSync(safe);
                 execSync("sqlite3 " + live + " \".backup '" + safe + "'\"");
-                
-                // 2. Shrink File (VACUUM) - Space Saving Logic
                 execSync("sqlite3 " + safe + " 'VACUUM;'");
                 
-                // 3. Upload to Supabase
                 console.log("📤 Uploading...");
                 await retry(async () => {
                    const { error } = await sb.storage.from('bot-storage').upload('database.sqlite', fs.readFileSync(safe), { upsert: true });
                    if(error) throw error;
                 });
 
-                // 4. Send to Telegram (With Key)
+                // Telegram Backup with KEY
                 if (process.env.TG_TOKEN && process.env.TG_ID) {
                     try {
-                        // 👇 Key Added to Caption
                         const caption = `💾 <b>Backup</b>\n📅 ${new Date().toISOString()}\n🔑 Key: <code>${process.env.N8N_KEY}</code>`;
-                        
                         const args = ["-s", "-F", `chat_id=${process.env.TG_ID}`, "-F", `document=@${safe};filename=n8n_backup.sqlite`, "-F", `caption=${caption}`, "-F", "parse_mode=HTML", `https://api.telegram.org/bot${process.env.TG_TOKEN}/sendDocument`];
                         spawnSync("curl", args);
                         console.log("✈️ Sent to Telegram");
-                    } catch (e) { console.error("Telegram Upload Failed"); }
+                    } catch (e) { console.error("Telegram Fail"); }
                 }
               }
             } catch(e) { console.error("Sync Error:", e.message); }
@@ -116,14 +129,18 @@ jobs:
           node smart_sync.js down
           sudo chmod -R 777 n8n_data
 
+      # ==================================================================
       # 4. INSTALL NODES
+      # ==================================================================
       - name: 📥 Install Nodes
         if: steps.node-cache.outputs.cache-hit != 'true'
         run: |
           cd n8n_data/nodes && npm init -y && npm install n8n-nodes-datastore n8n-nodes-run-node-with-credentials-x n8n-nodes-tesseractjs && cd ../..
           sudo chmod -R 777 n8n_data
 
+      # ==================================================================
       # 5. LAUNCH SERVICES
+      # ==================================================================
       - name: 🚀 Launch Bot Swarm
         env:
           TG_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
@@ -257,15 +274,15 @@ jobs:
           EOF
 
           # Reverse Proxy
-          echo 'Status: v73 Online' > public/index.html
+          echo 'Status: v75 Online' > public/index.html
           printf ":80 {\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n reverse_proxy /health wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
 
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile -v $(pwd)/public:/srv/public caddy:latest
           docker run -d --name wa-bot --network bot-net --restart unless-stopped -v $(pwd)/whatsapp:/app -w /app -e MONGODB_URI="${{ secrets.MONGODB_URI }}" node:20-alpine sh -c "apk add --no-cache git ffmpeg && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
-          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>System v73 Online</b>" -d parse_mode="HTML"
+          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>System v75 Online</b>" -d parse_mode="HTML"
 
-      # 6. OBSERVER LOOP
+      # 6. OBSERVER LOOP (Safe Trap + Secrets)
       - name: 🔄 Observer Loop
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -273,15 +290,21 @@ jobs:
           TG_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE }} 
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          N8N_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }} # 👈 Required for Backup Caption
+          N8N_KEY: ${{ secrets.N8N_ENCRYPTION_KEY }}
         run: |
-          trap 'echo "🚨 Emergency Save"; node smart_sync.js up; exit 0' EXIT
+          # TRAP: Save Data ONLY. NO Restart on manual cancel.
+          trap 'echo "🚨 Manual/Error Exit! Saving Data..."; node smart_sync.js up; exit 0' EXIT
           START=$(date +%s)
           while true; do
              NOW=$(date +%s); DIFF=$((NOW - START))
              
+             # --- AUTO HANDOVER LOGIC (5h 50m) ---
              if [ $DIFF -ge 21000 ]; then
-                 echo "⏰ Handover."; node smart_sync.js up; gh workflow run main.yml; sleep 30; exit 0
+                 echo "⏰ Handover Time."; node smart_sync.js up
+                 echo "🔫 Triggering Next..."
+                 gh workflow run main.yml
+                 sleep 30
+                 exit 0 # Safe exit after trigger
              fi
              
              if ! docker exec ai-server curl -s http://localhost:5000/health >/dev/null; then docker restart ai-server; fi

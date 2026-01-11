@@ -1,16 +1,16 @@
-name: "Production vFinal (Master Edition)"
+name: "Production vFinal (Strict & Clean)"
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */6 * * *' # Auto-Restart every 6 hours
+    - cron: '0 */6 * * *' # 6 घंटे में ऑटो-रीस्टार्ट
 
 concurrency:
   group: "production-bot"
   cancel-in-progress: true
 
 jobs:
-  run-master-vfinal:
+  run-final-strict:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     
@@ -19,29 +19,21 @@ jobs:
         uses: actions/checkout@v3
 
       # ==================================================================
-      # 1. SYSTEM TUNING (Max Performance)
+      # 1. SYSTEM TUNING
       # ==================================================================
       - name: ⚡ Optimize Environment
         run: |
-          # 4GB Swap to prevent RAM Crashes
           sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
-          # Network Boosting (BBR)
           sudo sysctl -w net.core.default_qdisc=fq && sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
-          
-          # Install Dependencies
           sudo apt-get update && sudo apt-get install -y sqlite3 curl ffmpeg
-          
-          # Install Ngrok
           curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
           echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
           sudo apt-get update && sudo apt-get install -y ngrok
-          
-          # Install Supabase Library
           npm install @supabase/supabase-js
-          echo "✅ System Optimized"
+          echo "✅ System Tuned"
 
       # ==================================================================
-      # 2. CACHING (Faster Boot)
+      # 2. CACHING
       # ==================================================================
       - name: 📦 Cache Modules
         uses: actions/cache@v3
@@ -49,10 +41,10 @@ jobs:
           path: |
             n8n_data/nodes
             whatsapp/node_modules
-          key: bot-final-deps-${{ runner.os }}
+          key: bot-strict-deps-${{ runner.os }}
 
       # ==================================================================
-      # 3. SMART DATA SYNC (Supabase Backup)
+      # 3. SMART DATA SYNC (Strict Mode)
       # ==================================================================
       - name: 💾 Setup Data Layer
         env:
@@ -68,9 +60,13 @@ jobs:
           const { createClient } = require('@supabase/supabase-js');
           const fs = require('fs'); const { execSync, spawnSync } = require('child_process');
           
-          // 🔥 SECURITY FIX: No Hardcoded URL
+          // 🔥 STRICT SECURITY CHECK (No Hardcoding)
           const sbUrl = process.env.SUPABASE_URL;
-          if (!sbUrl) { console.error("❌ MISSING SUPABASE_URL"); process.exit(1); }
+          if (!sbUrl || !sbUrl.startsWith('http')) {
+              console.error("❌ CRITICAL ERROR: 'SUPABASE_URL' Secret is MISSING or INVALID.");
+              console.error("👉 Please add SUPABASE_URL in GitHub Secrets to continue.");
+              process.exit(1); // Fail the build intentionally
+          }
 
           const sb = createClient(sbUrl, process.env.SUPABASE_KEY);
           const live='n8n_data/database.sqlite', safe='n8n_data/db_snap.sqlite';
@@ -87,10 +83,10 @@ jobs:
           async function run(mode) {
             try {
               if(mode==='down') {
-                console.log("📥 Downloading Data...");
+                console.log("📥 Downloading Backup...");
                 await retry(async () => {
                    const { data, error } = await sb.storage.from('bot-storage').download('database.sqlite');
-                   if(error) { console.log("⚠️ Fresh Start (No Backup)"); return; }
+                   if(error) { console.log("⚠️ Fresh Start (No Backup Found)"); return; }
                    fs.writeFileSync(live, Buffer.from(await data.arrayBuffer()));
                    try { execSync("sqlite3 " + live + " 'PRAGMA journal_mode=WAL;'"); } catch(e) {}
                 });
@@ -142,12 +138,11 @@ jobs:
         run: |
           docker network create bot-net || true
           
-          # Ngrok
           ngrok config add-authtoken $NGROK_AUTH
           ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > /dev/null &
           sleep 5
           
-          # 🧠 AI Service
+          # AI Service
           cat << 'EOF' > ai/ai_server.py
           import g4f, flask, logging
           app = flask.Flask(__name__)
@@ -157,7 +152,6 @@ jobs:
               try:
                   msg = flask.request.json.get('message')
                   if not msg: return flask.jsonify({'error': 'No message'}), 400
-                  # Auto Provider for Best Stability
                   response = g4f.ChatCompletion.create(model=g4f.models.gpt_4, messages=[{'role': 'user', 'content': msg}])
                   return flask.jsonify({'response': response})
               except Exception as e: return flask.jsonify({'error': str(e)}), 500
@@ -170,7 +164,7 @@ jobs:
             -v $(pwd)/ai:/app -w /app \
             python:3.9-slim sh -c "apt-get update && apt-get install -y curl build-essential && pip install flask g4f curl_cffi && while true; do python ai_server.py; sleep 2; done"
 
-          # 🔗 n8n Service
+          # n8n Service
           docker run -d --name n8n --network bot-net --restart unless-stopped \
             -v $(pwd)/n8n_data:/home/node/.n8n \
             -e N8N_ENCRYPTION_KEY="${{ secrets.N8N_ENCRYPTION_KEY }}" \
@@ -184,7 +178,7 @@ jobs:
             -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
             n8nio/n8n
 
-          # 📱 WhatsApp Service (🔥 FINAL MASTER VERSION 🔥)
+          # WhatsApp Service (Updated with Clean Logic)
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"^6.7.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
           
           cat << 'EOF' > whatsapp/index.js
@@ -193,27 +187,16 @@ jobs:
           const NodeCache = require('node-cache');
           
           const app = express(); app.use(express.json());
-          
           const N8N_URL = "http://n8n:5678/webhook/whatsapp"; 
           const MONGO_URL = process.env.MONGODB_URI;
           
           const authSchema = new mongoose.Schema({ _id: String, data: Object }); 
-          // 🔥 PERMANENT DB NAME: 'auth_wa_fixed' (One last scan required)
+          // Permanent DB Name
           const AuthModel = mongoose.model('Auth_WA_Fixed', authSchema, 'auth_wa_fixed');
           
           async function useMongoDB() {
-              const writeData = async (data, id) => { 
-                  try { 
-                      const json = JSON.parse(JSON.stringify(data, BufferJSON.replacer)); 
-                      await AuthModel.findOneAndUpdate({ _id: id }, { data: json, _id: id }, { upsert: true }); 
-                  } catch (err) { console.error("DB Write Fail:", err.message); } 
-              };
-              const readData = async (id) => { 
-                  try { 
-                      const doc = await AuthModel.findById(id); 
-                      return doc ? JSON.parse(JSON.stringify(doc.data), BufferJSON.reviver) : null; 
-                  } catch (err) { return null; } 
-              };
+              const writeData = async (data, id) => { try { const json = JSON.parse(JSON.stringify(data, BufferJSON.replacer)); await AuthModel.findOneAndUpdate({ _id: id }, { data: json, _id: id }, { upsert: true }); } catch (err) { console.error("DB Write Fail:", err.message); } };
+              const readData = async (id) => { try { const doc = await AuthModel.findById(id); return doc ? JSON.parse(JSON.stringify(doc.data), BufferJSON.reviver) : null; } catch (err) { return null; } };
               const removeData = async (id) => { try { await AuthModel.findByIdAndDelete(id); } catch (err) {} };
               const creds = (await readData('creds')) || (await (require('@whiskeysockets/baileys').initAuthCreds)());
               return { state: { creds, keys: { get: async (t, i) => { const d = {}; await Promise.all(i.map(async id => { let v = await readData(`${t}-${id}`); if (t === 'app-state-sync-key' && v) v = require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(v); if (v) d[id] = v; })); return d; }, set: async (d) => { const t = []; for (const c in d) for (const i in d[c]) { const v = d[c][i], k = `${c}-${i}`; t.push(v ? writeData(v, k) : removeData(k)); } await Promise.all(t); } } }, saveCreds: () => writeData(creds, 'creds'), clear: async () => { await AuthModel.deleteMany({}); } };
@@ -224,11 +207,9 @@ jobs:
           
           async function start() {
               try {
-                  console.log("⏳ Connecting to DB...");
                   if(mongoose.connection.readyState === 0) await mongoose.connect(MONGO_URL, { dbName: 'wa_bot_db' });
                   const { state, saveCreds, clear } = await useMongoDB(); global.clear = clear;
                   
-                  // 🔥 ANTI-BAN: Dynamic Version Fetching
                   const { version } = await fetchLatestBaileysVersion();
                   console.log(`🚀 Starting Bot vFinal with Version: ${version.join('.')}`);
 
@@ -237,12 +218,9 @@ jobs:
                       auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: "fatal" })) }, 
                       logger: pino({ level: 'silent' }), 
                       printQRInTerminal: false, 
-                      // 🔥 ANTI-BAN: Browser Spoofing (Looks like Chrome on Windows)
                       browser: ["Windows", "Chrome", "10.0"], 
                       connectTimeoutMs: 60000, 
-                      defaultQueryTimeoutMs: 60000,
-                      keepAliveIntervalMs: 10000,
-                      syncFullHistory: false, // Low Bandwidth
+                      syncFullHistory: false,
                       msgRetryCounterCache
                   });
                   
@@ -254,7 +232,6 @@ jobs:
                       if(connection === 'close') { 
                           const code = lastDisconnect.error?.output?.statusCode; 
                           if(code === DisconnectReason.loggedOut || code === 440 || code === 405) { 
-                              console.log("⚠️ Session Invalid. Resetting...");
                               await clear(); process.exit(1); 
                           } else { setTimeout(start, 3000); } 
                       } 
@@ -267,22 +244,18 @@ jobs:
                       try { 
                           const realNumber = (msg.key.participant || msg.key.remoteJid).split('@')[0]; 
                           const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "Media/Other";
-                          
-                          // 🔥 FEATURE: Outgoing Message Support
                           const isFromMe = msg.key.fromMe || false;
-                          const pushName = msg.pushName || (isFromMe ? "Me" : "Unknown"); // Crash Guard
+                          const pushName = msg.pushName || (isFromMe ? "Me" : "Unknown");
 
-                          console.log(`📡 Process: "${text}" | Me: ${isFromMe}`);
+                          console.log(`📡 Msg: "${text}" | Me: ${isFromMe}`);
 
-                          // Send to n8n (Both Incoming & Outgoing)
                           await axios.post(N8N_URL, { 
                               from: realNumber, 
                               text: text, 
                               name: pushName,
                               fromMe: isFromMe, 
                               full_json: msg 
-                          }).then(() => console.log("✅ Webhook Sent"))
-                            .catch((e) => console.error(`❌ Webhook Fail: ${e.message}`));
+                          }).then(()=> console.log("✅ Webhook Sent")).catch(e => console.error(`❌ Webhook Fail: ${e.message}`));
 
                       } catch (e) { console.error("Msg Error:", e.message); } 
                   });
@@ -298,11 +271,9 @@ jobs:
                   if (!sock.ws.isOpen) await new Promise(r => setTimeout(r, 2000));
                   
                   if (sock.ws.isOpen) { 
-                      // 🔥 ANTI-BAN: Human Typing Delay
                       await sock.sendPresenceUpdate('composing', fullId);
                       await delay(Math.floor(Math.random() * 1000) + 500); 
                       await sock.sendPresenceUpdate('paused', fullId);
-                      
                       await sock.sendMessage(fullId, { text: message }); 
                       res.json({ status: true }); 
                   } 
@@ -329,11 +300,9 @@ jobs:
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile -v $(pwd)/public:/srv/public caddy:latest
           docker run -d --name wa-bot --network bot-net --restart unless-stopped -v $(pwd)/whatsapp:/app -w /app -e MONGODB_URI="${{ secrets.MONGODB_URI }}" node:20-alpine sh -c "apk add --no-cache git ffmpeg && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
-          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>System vFinal Online (Master)</b>" -d parse_mode="HTML"
+          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>System vFinal Online (Strict)</b>" -d parse_mode="HTML"
 
-      # ==================================================================
       # 6. OBSERVER LOOP
-      # ==================================================================
       - name: 🔄 Observer Loop
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}

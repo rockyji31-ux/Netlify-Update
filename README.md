@@ -1,119 +1,161 @@
 # 🤖 Ultimate WhatsApp AI Bot  
 **Production v90**
 
-Run a **24×7 WhatsApp AI Bot** on **GitHub Actions** using **Ngrok, MongoDB, Supabase, Telegram and n8n** — completely **free**.
+Run a **24×7 WhatsApp AI Bot** on **GitHub Actions** using **Ngrok, MongoDB, Supabase, Telegram and n8n** — completely **FREE**.
 
 ---
 
-## 🚀 Features
-- WhatsApp Auto Reply  
+# 🚀 What You Get
+- WhatsApp Auto Reply Bot  
 - AI Chat (g4f)  
 - MongoDB Database  
-- Supabase Cloud Backup  
+- Supabase Backup & Storage  
 - Telegram Notifications  
-- n8n Automation  
-- GitHub Actions Hosting  
+- n8n Workflow Automation  
+- Runs forever on GitHub Actions  
 
 ---
 
-## 🔐 Step 0 — Open GitHub Secrets
+# ⚠️ GitHub Actions – VERY IMPORTANT
+
+GitHub free limits:
+
+| Repo Type | Minutes |
+|----------|--------|
+| **Public Repository** | **Unlimited** ✅ |
+| Private Repository | 2000 min / month ❌ |
+
+👉 **Always make your repository PUBLIC**, otherwise the bot will stop.
+
+---
+
+# 🔐 Step 0 — GitHub Secrets Page
 
 Open:
 ```
-GitHub Repo → Settings → Secrets and variables → Actions
+Repository → Settings → Secrets and variables → Actions
 ```
-Click **New repository secret** for all keys below.
+Click **New repository secret** for every key below.
 
 ---
 
-## 🛠 Step 1 — Ngrok
+# 🛠 Step 1 — Ngrok (Public URL)
 
-Login: https://dashboard.ngrok.com  
-Open **Setup & Installation**
+1. Login: https://dashboard.ngrok.com  
+2. Open **Setup & Installation**
+3. Copy **Authtoken**
 
-### Add Secrets
+| Secret | Value |
+|-------|-------|
+| `NGROK_TOKEN` | Your Ngrok token |
 
-| Name | Value |
-|------|-------|
-| `NGROK_TOKEN` | Your Ngrok Authtoken |
-| `NGROK_DOMAIN` | your-domain.ngrok-free.dev |
+4. Scroll to **Deploy your app online**
+5. Copy domain (example: `bot.ngrok-free.dev`)
+
+| Secret | Value |
+|-------|-------|
+| `NGROK_DOMAIN` | Domain (NO https://) |
 
 ---
 
-## 🛠 Step 2 — MongoDB Atlas
+# 🛢 Step 2 — MongoDB Atlas
 
-Your connection string:
+## 1️⃣ Database User
+MongoDB → **Database Access**
+
+Set:
+```
+Built-in Role: atlasAdmin
+```
+
+---
+
+## 2️⃣ Network Access (IMPORTANT)
+MongoDB → **Network Access → Add IP Address**
+
+Add:
+```
+0.0.0.0/0
+```
+This allows GitHub + Ngrok to connect.
+
+---
+
+## 3️⃣ Connection String
+
+Original:
 ```
 mongodb+srv://user:<password>@cluster0.abc.mongodb.net/?appName=Cluster0
 ```
 
-Edit it:
+Edit to:
 ```
 mongodb+srv://user:password@cluster0.abc.mongodb.net/wa_bot_db?retryWrites=true&w=majority
 ```
 
-Save:
+Save in GitHub:
 
-| Name | Value |
-|------|-------|
+| Secret | Value |
+|-------|-------|
 | `MONGODB_URI` | Final edited URL |
 
 ---
 
-## 🛠 Step 3 — Supabase
+# 🛠 Step 3 — Supabase
 
-Create Storage Bucket:
+## Create Storage Bucket
+Supabase → **Storage → New Bucket**
+
 ```
-bot-storage
+Name: bot-storage
+Public: OFF
 ```
-Public = OFF
 
-Get keys from **Settings → API**
+## API Keys (Settings → API)
 
-| Name | Value |
-|------|-------|
+| Secret | Value |
+|-------|-------|
 | `SUPABASE_URL` | Project URL |
-| `SUPABASE_SERVICE_ROLE` | service_role key |
+| `SUPABASE_SERVICE_ROLE` | service_role key (NOT anon) |
 
 ---
 
-## 🛠 Step 4 — Telegram
+# 🛠 Step 4 — Telegram Alerts
 
-Create bot via **@BotFather**  
-Get user ID via **@userinfobot**
+1. Create bot → **@BotFather**
+2. Get your ID → **@userinfobot**
 
-| Name | Value |
-|------|-------|
+| Secret | Value |
+|-------|-------|
 | `TELEGRAM_BOT_TOKEN` | Bot token |
 | `TELEGRAM_CHAT_ID` | Your Telegram ID |
 
 ---
 
-## 🛠 Step 5 — GitHub Token
+# 🛠 Step 5 — GitHub Token
 
-GitHub → Settings → Developer Settings → Tokens (classic)
-
+GitHub → **Settings → Developer Settings → Tokens (classic)**  
 Enable: `workflow`
 
-| Name | Value |
-|------|-------|
-| `GH_PAT` | GitHub Token |
+| Secret | Value |
+|-------|-------|
+| `GH_PAT` | GitHub token |
 | `N8N_ENCRYPTION_KEY` | Any password |
 
 ---
 
-## 🌐 Bot URLs
+# 🌐 Bot Control URLs
 
-After workflow starts:
+After bot starts:
 
-```
-https://YOUR-NGROK-DOMAIN/qr
-https://YOUR-NGROK-DOMAIN/reset
-```
+| URL | Use |
+|------|-----|
+| `https://YOUR-NGROK-DOMAIN/qr` | Scan WhatsApp QR |
+| `https://YOUR-NGROK-DOMAIN/reset` | Reset WhatsApp if stuck |
 
 ---
 
-## 📤 Send WhatsApp (n8n)
+# 📤 Send WhatsApp (n8n)
 
 ```
 POST http://wa-bot:10000/send
@@ -128,7 +170,7 @@ POST http://wa-bot:10000/send
 
 ---
 
-## 🤖 AI Chat
+# 🤖 AI Chat (g4f)
 
 ```
 POST http://ai-server:5000/chat
@@ -142,18 +184,21 @@ POST http://ai-server:5000/chat
 
 ---
 
-## ▶️ Run Bot
+# ▶️ Run the Bot
 
 1. Create:
 ```
 .github/workflows/main.yml
 ```
-2. Paste **Production v90 Workflow**
-3. Commit
-4. Go to **Actions → Run Workflow**
+2. Paste **Production v90 workflow**
+3. Commit  
+4. Go to:
+```
+Actions → Run Workflow
+```
 
 ---
 
-## ✅ DONE
+# ✅ DONE
 
-Your **WhatsApp AI Bot** is now live **24×7 on GitHub Actions**.
+Your **WhatsApp AI Bot** is now running **24×7 on GitHub Actions**.

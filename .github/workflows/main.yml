@@ -17,13 +17,12 @@ jobs:
         uses: actions/checkout@v3
 
       # ==================================================================
-      # 1. SYSTEM TUNING (Reverted to Stability)
+      # 1. SYSTEM TUNING
       # ==================================================================
       - name: ⚡ Optimize Environment
         run: |
           sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
           sudo sysctl -w net.core.default_qdisc=fq && sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
-          # Reverted to basic stable dependencies to prevent crashes
           sudo apt-get update && sudo apt-get install -y sqlite3 curl ffmpeg
           curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
           echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
@@ -125,7 +124,7 @@ jobs:
           sudo chmod -R 777 n8n_data
 
       # ==================================================================
-      # 5. LAUNCH SERVICES (Pro Mode)
+      # 5. LAUNCH SERVICES
       # ==================================================================
       - name: 🚀 Launch Bot Swarm
         env:
@@ -135,13 +134,11 @@ jobs:
         run: |
           docker network create bot-net || true
           
-          # --- NGROK ---
           ngrok config add-authtoken $NGROK_AUTH
-          # We add a header modification to request to bypass warning if possible
           ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > /dev/null &
           sleep 5
           
-          # --- AI Service ---
+          # AI Service
           cat << 'EOF' > ai/ai_server.py
           import g4f, flask, logging
           app = flask.Flask(__name__)
@@ -163,7 +160,7 @@ jobs:
             -v $(pwd)/ai:/app -w /app \
             python:3.9-slim sh -c "apt-get update && apt-get install -y curl build-essential && pip install flask g4f curl_cffi && while true; do python ai_server.py; sleep 2; done"
 
-          # --- n8n Service ---
+          # n8n Service
           docker run -d --name n8n --network bot-net --restart unless-stopped \
             -v $(pwd)/n8n_data:/home/node/.n8n \
             -e N8N_ENCRYPTION_KEY="${{ secrets.N8N_ENCRYPTION_KEY }}" \
@@ -177,7 +174,7 @@ jobs:
             -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
             n8nio/n8n
 
-          # --- WhatsApp Service (Signature & Header Fix) ---
+          # WhatsApp Service (FIXED: PORT DEFINITION)
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"^6.7.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
           
           cat << 'EOF' > whatsapp/index.js
@@ -185,24 +182,17 @@ jobs:
           const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino');
           const NodeCache = require('node-cache');
           
+          // 🔥 CRITICAL FIX: Define PORT
           const PORT = 10000;
-          const app = express(); app.use(express.json());
           
-          // Internal N8N Link (Bypasses Ngrok)
+          const app = express(); app.use(express.json());
           const N8N_URL = "http://n8n:5678/webhook/whatsapp"; 
           const MONGO_URL = process.env.MONGODB_URI;
-          
-          // 🔥 BYPASS HEADER: This allows axios to talk through Ngrok tunnels without "Visit Site" error if needed
-          const axiosConfig = {
-            headers: {
-              'ngrok-skip-browser-warning': 'true',
-              'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
-          };
           
           const authSchema = new mongoose.Schema({ _id: String, data: Object }); 
           const AuthModel = mongoose.model('Auth_WA_Fixed', authSchema, 'auth_wa_fixed');
           
+          // Hybrid Auth: Tries MongoDB, falls back to Memory if fails
           async function useAuth() {
               if (MONGO_URL) {
                  try {
@@ -214,6 +204,7 @@ jobs:
                      return { state: { creds, keys: { get: async (t, i) => { const d = {}; await Promise.all(i.map(async id => { let v = await readData(`${t}-${id}`); if (t === 'app-state-sync-key' && v) v = require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(v); if (v) d[id] = v; })); return d; }, set: async (d) => { const t = []; for (const c in d) for (const i in d[c]) { const v = d[c][i], k = `${c}-${i}`; t.push(v ? writeData(v, k) : removeData(k)); } await Promise.all(t); } } }, saveCreds: () => writeData(creds, 'creds'), clear: async () => { await AuthModel.deleteMany({}); } };
                  } catch (e) { console.error("⚠️ Mongo Fail, using Temp File Auth"); }
               }
+              // Fallback to file auth
               return await useMultiFileAuthState('auth_info_baileys');
           }
           
@@ -226,18 +217,15 @@ jobs:
                   const { version } = await fetchLatestBaileysVersion();
                   console.log(`🚀 Starting WA Bot on Port ${PORT}`);
                   
-                  // 🔥 SUPER ADVANCED BROWSER SIGNATURE 🔥
-                  // Makes WhatsApp think this is a Real Mac, not a Bot.
                   sock = makeWASocket({ 
                       version,
                       auth: state,
                       logger: pino({ level: 'silent' }), 
                       printQRInTerminal: false, 
-                      browser: ["Mac OS", "Chrome", "10.15.7"], 
+                      browser: ["Windows", "Chrome", "10.0"], 
                       connectTimeoutMs: 60000, 
                       syncFullHistory: false,
-                      msgRetryCounterCache,
-                      markOnlineOnConnect: true
+                      msgRetryCounterCache
                   });
                   
                   sock.ev.on('creds.update', saveCreds);
@@ -262,8 +250,7 @@ jobs:
                           const isFromMe = msg.key.fromMe || false;
                           const pushName = msg.pushName || (isFromMe ? "Me" : "Unknown");
                           console.log(`📡 Msg: "${text}" | Me: ${isFromMe}`);
-                          // Using axiosConfig to bypass Ngrok warning if hitting external link
-                          await axios.post(N8N_URL, { from: realNumber, text: text, name: pushName, fromMe: isFromMe, full_json: msg }, axiosConfig).catch(e => {});
+                          await axios.post(N8N_URL, { from: realNumber, text: text, name: pushName, fromMe: isFromMe, full_json: msg }).catch(e => {});
                       } catch (e) {} 
                   });
               } catch (e) { setTimeout(start, 5000); }
@@ -284,8 +271,6 @@ jobs:
           
           app.get('/qr', async (req, res) => { 
               const meta = '<meta http-equiv="refresh" content="3">';
-              // Helps browser trust the page
-              res.setHeader('ngrok-skip-browser-warning', 'true');
               if(sock?.user && !qrData) return res.send(meta + '<h1>✅ Connected</h1>'); 
               if(!qrData) return res.send(meta + '<h1>⏳ Generating QR...</h1>'); 
               const url = await QRCode.toDataURL(qrData); 
@@ -296,7 +281,7 @@ jobs:
           app.listen(PORT, () => { console.log(`Bot on ${PORT}`); start(); });
           EOF
 
-          # --- Reverse Proxy (Caddy) ---
+          # Reverse Proxy
           echo 'Status: vFinal Online' > public/index.html
           printf ":80 {\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n reverse_proxy /reset wa-bot:10000\n reverse_proxy /health wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
 
@@ -306,7 +291,7 @@ jobs:
           curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>System vFinal Online (Fixed)</b>" -d parse_mode="HTML"
 
       # ==================================================================
-      # 6. OBSERVER LOOP
+      # 6. OBSERVER LOOP (FIXED - ADDED SECRETS)
       # ==================================================================
       - name: 🔄 Observer Loop
         env:

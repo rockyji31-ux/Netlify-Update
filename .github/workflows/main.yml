@@ -17,18 +17,18 @@ jobs:
         uses: actions/checkout@v3
 
       # ==================================================================
-      # 1. SYSTEM TUNING (High Performance Mode)
+      # 1. SYSTEM TUNING (REVERTED TO WORKING VERSION)
       # ==================================================================
       - name: ⚡ Optimize Environment
         run: |
           sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
           sudo sysctl -w net.core.default_qdisc=fq && sudo sysctl -w net.ipv4.tcp_congestion_control=bbr
-          sudo apt-get update && sudo apt-get install -y sqlite3 curl ffmpeg libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2
+          sudo apt-get update && sudo apt-get install -y sqlite3 curl ffmpeg
           curl -s https://ngrok-agent.s3.amazonaws.com/ngrok.asc | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
           echo "deb https://ngrok-agent.s3.amazonaws.com buster main" | sudo tee /etc/apt/sources.list.d/ngrok.list
           sudo apt-get update && sudo apt-get install -y ngrok
           npm install @supabase/supabase-js
-          echo "✅ System Tuned & Dependencies Ready"
+          echo "✅ System Tuned"
 
       # ==================================================================
       # 2. CACHING
@@ -124,7 +124,7 @@ jobs:
           sudo chmod -R 777 n8n_data
 
       # ==================================================================
-      # 5. LAUNCH SERVICES (SUPER ADVANCED MODE)
+      # 5. LAUNCH SERVICES
       # ==================================================================
       - name: 🚀 Launch Bot Swarm
         env:
@@ -134,9 +134,9 @@ jobs:
         run: |
           docker network create bot-net || true
           
-          # --- NGROK WITH HEADER BYPASS ---
+          # --- NGROK (ADDED HEADER BYPASS) ---
           ngrok config add-authtoken $NGROK_AUTH
-          # We add a header modification to try and force browser behavior
+          # Fixed command: Added request header to bypass warning
           ngrok http --domain=${{ secrets.NGROK_DOMAIN }} --request-header-add "ngrok-skip-browser-warning: true" 80 > /dev/null &
           sleep 5
           
@@ -176,7 +176,7 @@ jobs:
             -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
             n8nio/n8n
 
-          # --- WhatsApp Service (BROWSER SPOOFING ENABLED) ---
+          # --- WhatsApp Service (BROWSER SIGNATURE ADDED) ---
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"^6.7.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
           
           cat << 'EOF' > whatsapp/index.js
@@ -215,14 +215,13 @@ jobs:
                   const { version } = await fetchLatestBaileysVersion();
                   console.log(`🚀 Starting WA Bot on Port ${PORT}`);
                   
-                  // 🔥 SUPER ADVANCED BROWSER SIGNATURE 🔥
-                  // This tells WhatsApp Servers we are a Real Chrome Browser on Mac OS
+                  // 🔥 BROWSER SIGNATURE HERE 🔥
                   sock = makeWASocket({ 
                       version,
                       auth: state,
                       logger: pino({ level: 'silent' }), 
                       printQRInTerminal: false, 
-                      browser: ["Mac OS", "Chrome", "121.0.0"], 
+                      browser: ["Windows", "Chrome", "10.0"], // Spoofer
                       connectTimeoutMs: 60000, 
                       syncFullHistory: false,
                       msgRetryCounterCache,
@@ -272,9 +271,6 @@ jobs:
           
           app.get('/qr', async (req, res) => { 
               const meta = '<meta http-equiv="refresh" content="3">';
-              // We add this header to tell Ngrok we are a "safe" browser
-              res.setHeader('ngrok-skip-browser-warning', 'true');
-              
               if(sock?.user && !qrData) return res.send(meta + '<h1>✅ Connected</h1>'); 
               if(!qrData) return res.send(meta + '<h1>⏳ Generating QR...</h1>'); 
               const url = await QRCode.toDataURL(qrData); 
@@ -287,14 +283,13 @@ jobs:
 
           # --- Reverse Proxy (Caddy) ---
           echo 'Status: vFinal Online' > public/index.html
-          
-          # We force headers here to bypass checks
-          printf ":80 {\n header_up User-Agent \"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36\"\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n reverse_proxy /reset wa-bot:10000\n reverse_proxy /health wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
+          # Header modification to help with Ngrok warning if possible
+          printf ":80 {\n header_up ngrok-skip-browser-warning true\n reverse_proxy /chat ai-server:5000\n reverse_proxy /qr wa-bot:10000\n reverse_proxy /reset wa-bot:10000\n reverse_proxy /health wa-bot:10000\n handle /dash {\n  root * /srv/public\n  file_server\n }\n reverse_proxy /* n8n:5678\n}\n" > Caddyfile
 
           docker run -d --name caddy --network bot-net -p 80:80 -v $(pwd)/Caddyfile:/etc/caddy/Caddyfile -v $(pwd)/public:/srv/public caddy:latest
           docker run -d --name wa-bot --network bot-net --restart unless-stopped -v $(pwd)/whatsapp:/app -w /app -e MONGODB_URI="${{ secrets.MONGODB_URI }}" node:20-alpine sh -c "apk add --no-cache git ffmpeg && npm install && while true; do node index.js; echo 'Restarting...'; sleep 2; done"
 
-          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>System vFinal Online (Fixed & Spoofed)</b>" -d parse_mode="HTML"
+          curl -s -X POST https://api.telegram.org/bot$TG_TOKEN/sendMessage -d chat_id=$TG_ID -d text="🟢 <b>System vFinal Online (REPAIRED)</b>" -d parse_mode="HTML"
 
       # ==================================================================
       # 6. OBSERVER LOOP

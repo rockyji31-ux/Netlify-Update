@@ -1,121 +1,159 @@
-# 🤖 Ultimate WhatsApp AI Bot (Production v90)
+# 🤖 Ultimate WhatsApp AI Bot  
+**Production v90**
 
-This is a complete guide to set up your **FREE & Immortal** WhatsApp Bot on GitHub Actions.
-
----
-
-## ⚡ सबसे पहले यह पेज खोलें
-1.  अपने **GitHub Repository** में जाएं।
-2.  ऊपर **Settings** टैब पर क्लिक करें।
-3.  लेफ्ट साइड में **Secrets and variables** -> **Actions** पर क्लिक करें।
-4.  इस पेज को खुला रखें। हम जो भी कॉपी करेंगे, यहीं **"New repository secret"** बटन दबाकर सेव करेंगे।
+Run a **24×7 WhatsApp AI Bot** on **GitHub Actions** using **Ngrok, MongoDB, Supabase, Telegram and n8n** — completely **free**.
 
 ---
 
-## 🛠️ Step 1: Ngrok (Server Tunnel)
-1.  [dashboard.ngrok.com](https://dashboard.ngrok.com) पर लॉगिन करें।
-2.  लेफ्ट मेनू में **"Setup & Installation"** पर क्लिक करें।
-3.  **Token:** पेज पर सबसे ऊपर **"Your Authtoken"** दिखेगा, उसे कॉपी करें।
-    * 👉 **GitHub Secret Name:** `NGROK_TOKEN`
-    * 👉 **Value:** (Token पेस्ट करें)
-4.  **Domain:** उसी पेज पर नीचे स्क्रॉल करें। **"Deploy your app online"** सेक्शन में एक नीले रंग का लिंक दिखेगा (जैसे `fun-bot.ngrok-free.dev`)। उसे कॉपी करें (**बिना** `https://` के)।
-    * 👉 **GitHub Secret Name:** `NGROK_DOMAIN`
-    * 👉 **Value:** (Domain पेस्ट करें)
+## 🚀 Features
+- WhatsApp Auto Reply  
+- AI Chat (g4f)  
+- MongoDB Database  
+- Supabase Cloud Backup  
+- Telegram Notifications  
+- n8n Automation  
+- GitHub Actions Hosting  
 
 ---
 
-## 🛠️ Step 2: MongoDB Atlas (Database)
-**आपको नया कुछ नहीं बनाना, बस यह लिंक कॉपी करें और एडिट करें:**
+## 🔐 Step 0 — Open GitHub Secrets
 
-1.  [cloud.mongodb.com](https://cloud.mongodb.com) पर लॉगिन करके **Connect** बटन दबाएं और लिंक कॉपी करें।
-2.  लिंक ऐसा दिखेगा: `mongodb+srv://user:<password>@cluster0.abc.mongodb.net/?appName=Cluster0`
-3.  **इसे ऐसे एडिट (Edit) करें:**
-    * `<password>` हटाकर अपना असली पासवर्ड लिखें।
-    * `.net/` के बाद वाले हिस्से को हटाकर `wa_bot_db?retryWrites=true&w=majority` जोड़ दें।
-
-    **✅ Final Link ऐसा दिखना चाहिए:**
-    ```text
-    mongodb+srv://apna_user:apna_pass@cluster0.abc.mongodb.net/wa_bot_db?retryWrites=true&w=majority
-    ```
-4.  इस फाइनल लिंक को GitHub में सेव करें:
-    * 👉 **GitHub Secret Name:** `MONGODB_URI`
-    * 👉 **Value:** (अपना एडिट किया हुआ लिंक पेस्ट करें)
+Open:
+```
+GitHub Repo → Settings → Secrets and variables → Actions
+```
+Click **New repository secret** for all keys below.
 
 ---
 
-## 🛠️ Step 3: Supabase (Backup & Storage)
-*ध्यान से फॉलो करें:*
+## 🛠 Step 1 — Ngrok
 
-### 1️⃣ पहले Storage Bucket बनाएं (जरूरी है)
-1.  [supabase.com](https://supabase.com) पर प्रोजेक्ट खोलें।
-2.  लेफ्ट मेनू में **Storage** (फ़ोल्डर आइकॉन) पर क्लिक करें।
-3.  **New Bucket** बटन दबाएं।
-4.  Name रखें: `bot-storage` (स्पेलिंग यही होनी चाहिए)।
-5.  **Public bucket** को **OFF** रखें और **Save** करें।
+Login: https://dashboard.ngrok.com  
+Open **Setup & Installation**
 
-### 2️⃣ अब API URL और Keys निकालें
-1.  लेफ्ट साइड में सबसे नीचे **Settings (⚙️)** पर क्लिक करें।
-2.  **API** सेक्शन पर क्लिक करें।
-3.  **URL:** ऊपर **Project URL** दिखेगा, उसे कॉपी करें।
-    * 👉 **GitHub Secret Name:** `SUPABASE_URL`
-    * 👉 **Value:** (पूरा लिंक `https://` के साथ पेस्ट करें)
-4.  **Key:** नीचे **"Legacy anon, service_role API keys"** पर क्लिक करें (अगर दिखे तो), या सीधे नीचे देखें।
-5.  वहां **service_role** (secret) वाली Key कॉपी करें (**anon** वाली नहीं)।
-    * 👉 **GitHub Secret Name:** `SUPABASE_SERVICE_ROLE`
-    * 👉 **Value:** (Key पेस्ट करें)
+### Add Secrets
+
+| Name | Value |
+|------|-------|
+| `NGROK_TOKEN` | Your Ngrok Authtoken |
+| `NGROK_DOMAIN` | your-domain.ngrok-free.dev |
 
 ---
 
-## 🛠️ Step 4: Telegram (Notifications)
-1.  Telegram पर **@BotFather** को `/newbot` भेजें -> Token कॉपी करें।
-    * 👉 **GitHub Secret Name:** `TELEGRAM_BOT_TOKEN`
-    * 👉 **Value:** (Token पेस्ट करें)
-2.  Telegram पर **@userinfobot** को `/start` भेजें -> ID कॉपी करें।
-    * 👉 **GitHub Secret Name:** `TELEGRAM_CHAT_ID`
-    * 👉 **Value:** (ID पेस्ट करें)
+## 🛠 Step 2 — MongoDB Atlas
+
+Your connection string:
+```
+mongodb+srv://user:<password>@cluster0.abc.mongodb.net/?appName=Cluster0
+```
+
+Edit it:
+```
+mongodb+srv://user:password@cluster0.abc.mongodb.net/wa_bot_db?retryWrites=true&w=majority
+```
+
+Save:
+
+| Name | Value |
+|------|-------|
+| `MONGODB_URI` | Final edited URL |
 
 ---
 
-## 🛠️ Step 5: GitHub Token & Security
-1.  GitHub में अपनी **Profile Photo** (Top Right) -> **Settings** -> **Developer Settings** -> **Personal access tokens** -> **Tokens (classic)**.
-2.  **Generate new token (classic)** दबाएं।
-3.  **Scope** में `workflow` वाले बॉक्स को टिक करें (✅)।
-4.  सबसे नीचे **Generate token** दबाएं और टोकन कॉपी करें।
-    * 👉 **GitHub Secret Name:** `GH_PAT`
-    * 👉 **Value:** (Token पेस्ट करें)
-5.  अपने मन से कोई भी एक पासवर्ड सोच लें (जैसे `MySecretPass123`)।
-    * 👉 **GitHub Secret Name:** `N8N_ENCRYPTION_KEY`
-    * 👉 **Value:** `MySecretPass123`
+## 🛠 Step 3 — Supabase
+
+Create Storage Bucket:
+```
+bot-storage
+```
+Public = OFF
+
+Get keys from **Settings → API**
+
+| Name | Value |
+|------|-------|
+| `SUPABASE_URL` | Project URL |
+| `SUPABASE_SERVICE_ROLE` | service_role key |
 
 ---
 
-## 🧩 API & Endpoints Guide (किसे कहाँ Use करें?)
+## 🛠 Step 4 — Telegram
 
-### 1️⃣ WhatsApp QR Code (Browser के लिए)
-जब बॉट स्टार्ट हो जाए, तो WhatsApp स्कैन करने के लिए यह लिंक Chrome में खोलें:
-* **URL:** `https://YOUR-NGROK-DOMAIN/qr`
+Create bot via **@BotFather**  
+Get user ID via **@userinfobot**
 
+| Name | Value |
+|------|-------|
+| `TELEGRAM_BOT_TOKEN` | Bot token |
+| `TELEGRAM_CHAT_ID` | Your Telegram ID |
 
-### 2️⃣ Sending Message (n8n Workflow के लिए)
-n8n के अंदर **HTTP Request Node** में यह डालें:
-* **Method:** `POST`
-* **URL:** `http://wa-bot:10000/send`
-* **Body:**
-  ```json
-  { 
-    "number": "919999999999", 
-    "message": "Hello from n8n!" 
-  }
+---
 
-जब  WhatsApp reset krne ke liye browser me khole:
-* **URL:** `https://YOUR-NGROK-DOMAIN/reset`
+## 🛠 Step 5 — GitHub Token
 
-### g4f AI (n8n Workflow के लिए)
-n8n के अंदर **HTTP Request Node** में यह डालें:
-* **Method:** `POST`
-* **URL:** `http://ai-server:5000/chat`
-* **Body:**
-  ```json
-  {  
-    "message": "your--text" 
-  }
+GitHub → Settings → Developer Settings → Tokens (classic)
+
+Enable: `workflow`
+
+| Name | Value |
+|------|-------|
+| `GH_PAT` | GitHub Token |
+| `N8N_ENCRYPTION_KEY` | Any password |
+
+---
+
+## 🌐 Bot URLs
+
+After workflow starts:
+
+```
+https://YOUR-NGROK-DOMAIN/qr
+https://YOUR-NGROK-DOMAIN/reset
+```
+
+---
+
+## 📤 Send WhatsApp (n8n)
+
+```
+POST http://wa-bot:10000/send
+```
+
+```json
+{
+  "number": "919999999999",
+  "message": "Hello from n8n"
+}
+```
+
+---
+
+## 🤖 AI Chat
+
+```
+POST http://ai-server:5000/chat
+```
+
+```json
+{
+  "message": "Write a short story"
+}
+```
+
+---
+
+## ▶️ Run Bot
+
+1. Create:
+```
+.github/workflows/main.yml
+```
+2. Paste **Production v90 Workflow**
+3. Commit
+4. Go to **Actions → Run Workflow**
+
+---
+
+## ✅ DONE
+
+Your **WhatsApp AI Bot** is now live **24×7 on GitHub Actions**.

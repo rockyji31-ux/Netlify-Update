@@ -135,7 +135,7 @@ jobs:
           sudo chmod -R 777 n8n_data
 
       # ==================================================================
-      # 5. LAUNCH SERVICES (FIXED: Added Smart Retry for Docker Pull)
+      # 5. LAUNCH SERVICES
       # ==================================================================
       - name: 🚀 Launch Bot Swarm
         env:
@@ -144,20 +144,6 @@ jobs:
           NGROK_AUTH: ${{ secrets.NGROK_TOKEN }}
         run: |
           docker network create bot-net || true
-          
-          # --- SMART IMAGE PRE-FETCHER (Prevents Timeout Errors) ---
-          echo "⬇️ Pre-fetching images with retry logic..."
-          images="n8nio/n8n:latest python:3.9-slim node:20-alpine caddy:latest"
-          for img in $images; do
-             count=0
-             until docker pull $img; do
-                ((count++))
-                if [ $count -gt 5 ]; then echo "❌ Failed to pull $img"; exit 1; fi
-                echo "⚠️ Network glitch on $img. Retrying ($count/5)..."
-                sleep 5
-             done
-          done
-          echo "✅ Images Ready"
           
           ngrok config add-authtoken $NGROK_AUTH
           ngrok http --domain=${{ secrets.NGROK_DOMAIN }} 80 > /dev/null &

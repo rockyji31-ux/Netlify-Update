@@ -174,15 +174,15 @@ jobs:
             -e EXECUTIONS_DATA_SAVE_ON_SUCCESS=none \
             n8nio/n8n
 
-          # WhatsApp Service (FIXED: PORT DEFINITION)
+          # WhatsApp Service (ADVANCED RESET ENABLED)
           echo '{"name":"wa-bot","dependencies":{"@whiskeysockets/baileys":"^6.7.0","axios":"^1.6.0","express":"^4.18.2","mongoose":"^8.0.0","pino":"^8.16.1","qrcode":"^1.5.3","node-cache":"^5.1.2"}}' > whatsapp/package.json
           
           cat << 'EOF' > whatsapp/index.js
           const { default: makeWASocket, DisconnectReason, BufferJSON, useMultiFileAuthState, makeCacheableSignalKeyStore, delay, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
           const express = require('express'); const axios = require('axios'); const mongoose = require('mongoose'); const QRCode = require('qrcode'); const pino = require('pino');
           const NodeCache = require('node-cache');
+          const fs = require('fs'); // Added for local cleanup
           
-          // 🔥 CRITICAL FIX: Define PORT
           const PORT = 10000;
           
           const app = express(); app.use(express.json());
@@ -192,7 +192,7 @@ jobs:
           const authSchema = new mongoose.Schema({ _id: String, data: Object }); 
           const AuthModel = mongoose.model('Auth_WA_Fixed', authSchema, 'auth_wa_fixed');
           
-          // Hybrid Auth: Tries MongoDB, falls back to Memory if fails
+          // Hybrid Auth
           async function useAuth() {
               if (MONGO_URL) {
                  try {
@@ -204,7 +204,6 @@ jobs:
                      return { state: { creds, keys: { get: async (t, i) => { const d = {}; await Promise.all(i.map(async id => { let v = await readData(`${t}-${id}`); if (t === 'app-state-sync-key' && v) v = require('@whiskeysockets/baileys/lib/Utils/auth-utils').proto.Message.AppStateSyncKeyData.fromObject(v); if (v) d[id] = v; })); return d; }, set: async (d) => { const t = []; for (const c in d) for (const i in d[c]) { const v = d[c][i], k = `${c}-${i}`; t.push(v ? writeData(v, k) : removeData(k)); } await Promise.all(t); } } }, saveCreds: () => writeData(creds, 'creds'), clear: async () => { await AuthModel.deleteMany({}); } };
                  } catch (e) { console.error("⚠️ Mongo Fail, using Temp File Auth"); }
               }
-              // Fallback to file auth
               return await useMultiFileAuthState('auth_info_baileys');
           }
           
@@ -276,7 +275,55 @@ jobs:
               const url = await QRCode.toDataURL(qrData); 
               res.send(meta + `<div style="text-align:center"><h1>Scan QR</h1><img src="${url}" /></div>`); 
           });
-          app.get('/reset', async (req, res) => { res.send("Restarting..."); process.exit(1); });
+
+          // 🔥 ADVANCED RESET & REDIRECT LOGIC 🔥
+          app.get('/reset', async (req, res) => { 
+              try {
+                  console.log("🧨 HARD RESET TRIGGERED");
+                  
+                  // 1. Drop Database from MongoDB
+                  if (mongoose.connection.readyState === 1) {
+                      await mongoose.connection.db.dropDatabase();
+                      console.log("✅ MongoDB 'wa_bot_db' Wiped");
+                  }
+                  
+                  // 2. Wipe Local Auth Folder (if exists)
+                  if (fs.existsSync('auth_info_baileys')) {
+                      fs.rmSync('auth_info_baileys', { recursive: true, force: true });
+                  }
+                  
+                  // 3. Send HTML with 5-Second Redirect
+                  const html = `
+                  <html>
+                    <head>
+                        <meta http-equiv="refresh" content="5;url=/qr" />
+                        <style>
+                            body { background-color: #121212; color: #ffffff; font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; flex-direction: column; }
+                            h1 { color: #ff4444; }
+                            .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin-top: 20px; }
+                            @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+                        </style>
+                    </head>
+                    <body>
+                        <h1>♻️ System Resetting...</h1>
+                        <p>Database Wiped. Restarting Engine.</p>
+                        <p>Redirecting to QR Scanner in 5 seconds...</p>
+                        <div class="loader"></div>
+                    </body>
+                  </html>`;
+                  
+                  res.send(html);
+                  
+                  // 4. Delayed Kill to ensure response is sent
+                  setTimeout(() => {
+                      process.exit(1); 
+                  }, 1000);
+                  
+              } catch (e) {
+                  res.status(500).send("Reset Failed: " + e.message);
+              }
+          });
+          
           app.get('/health', (req, res) => res.send("OK")); 
           app.listen(PORT, () => { console.log(`Bot on ${PORT}`); start(); });
           EOF
@@ -305,27 +352,27 @@ jobs:
           
           START=$(date +%s)
           while true; do
-             NOW=$(date +%s); DIFF=$((NOW - START))
-             
-             if [ $DIFF -ge 21000 ]; then
-                 echo "⏰ Time limit reached (21000s). Initiating Handover..."
-                 gh workflow run main.yml
-                 echo "✅ Next bot triggered (Pending in Queue)"
-                 node smart_sync.js up
-                 echo "✅ Data Saved"
-                 echo "👋 Exiting to let next bot take over."
-                 exit 0
-             fi
-             
-             if ! docker exec ai-server curl -s http://localhost:5000/health >/dev/null; then docker restart ai-server; fi
-             if ! docker exec wa-bot curl -s http://localhost:10000/health >/dev/null; then 
-                 if ! docker ps | grep -q wa-bot; then docker restart wa-bot; fi
-             fi
-             if ! docker ps | grep -q n8n; then docker restart n8n; fi
+              NOW=$(date +%s); DIFF=$((NOW - START))
+              
+              if [ $DIFF -ge 21000 ]; then
+                  echo "⏰ Time limit reached (21000s). Initiating Handover..."
+                  gh workflow run main.yml
+                  echo "✅ Next bot triggered (Pending in Queue)"
+                  node smart_sync.js up
+                  echo "✅ Data Saved"
+                  echo "👋 Exiting to let next bot take over."
+                  exit 0
+              fi
+              
+              if ! docker exec ai-server curl -s http://localhost:5000/health >/dev/null; then docker restart ai-server; fi
+              if ! docker exec wa-bot curl -s http://localhost:10000/health >/dev/null; then 
+                  if ! docker ps | grep -q wa-bot; then docker restart wa-bot; fi
+              fi
+              if ! docker ps | grep -q n8n; then docker restart n8n; fi
 
-             if [ $((DIFF % 900)) -lt 10 ]; then node smart_sync.js up; fi
-             
-             echo "💓 Alive: ${DIFF}s / 21000s"; sleep 60
+              if [ $((DIFF % 900)) -lt 10 ]; then node smart_sync.js up; fi
+              
+              echo "💓 Alive: ${DIFF}s / 21000s"; sleep 60
           done
 
       - name: 🚨 Notify Failure
